@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keymaster"
+version = "0.1.0"
+description = "Key Master: key, BPM, cue and loudness tool for DJs that writes straight into the Rekordbox database"
+requires-python = ">=3.11"
+dependencies = [
+    "librosa>=0.10",
+    "pyrekordbox>=0.5",
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+essentia = ["essentia"]
+app = ["fastapi", "uvicorn[standard]", "pyloudnorm", "mutagen", "platformdirs", "soxr"]
+stems = ["demucs"]
+
+[project.scripts]
+keymaster = "keymaster.cli:main"
+
+[tool.setuptools]
+packages = ["keymaster"]

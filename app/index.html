@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Key Master</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23ffb547'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%230d1015'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>Key <span>Master</span></h1>
+    <small>Key · BPM · Energy · Loudness</small>
+  </div>
+
+  <div class="loud-ctl" id="loudCtl">
+    <button class="switch" id="agSwitch" role="switch" aria-checked="true" type="button">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+      <span class="switch-text">Level volume</span>
+    </button>
+    <label class="preset-pick">
+      <span class="sr">Target loudness</span>
+      <select id="presetSel"></select>
+    </label>
+    <button class="icon-btn" id="loudInfo" type="button" aria-label="Loudness settings" title="Loudness settings">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h7M12 4h2M2 12h2M7 12h7M9.5 2.5v3M5.5 10.5v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>
+    </button>
+  </div>
+
+  <div class="actions">
+    <div class="jobs" id="jobsInd" hidden><span class="spin" aria-hidden="true"></span><span id="jobsTxt"></span></div>
+    <button class="btn" id="addFolder" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.5 1.6h5.9a1 1 0 0 1 1 1v6.4a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      Folder
+    </button>
+    <button class="btn" id="rbImport" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/></svg>
+      Load Rekordbox
+    </button>
+    <div class="menu-wrap">
+      <button class="btn primary" id="exportBtn" type="button" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3 3-3M2.5 11v2.5h11V11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Export to Rekordbox
+      </button>
+      <div class="menu" id="exportMenu" role="menu" hidden>
+        <button role="menuitem" type="button" data-export="db"><b>Write directly to Rekordbox</b><span>Keys, cues, playlists. Rekordbox must be closed.</span></button>
+        <button role="menuitem" type="button" data-export="xml"><b>Create rekordbox.xml</b><span>Includes beatgrid. Import it in Rekordbox via the rekordbox xml view.</span></button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="decks" id="decks">
+    <!-- deck template is cloned by app.js into #deckA and #deckB -->
+    <div class="deck panel" id="deckA" data-deck="A"></div>
+    <div class="mixer panel" id="mixer">
+      <div class="ch" data-ch="A">
+        <div class="label">A</div>
+        <div class="vu"><i></i></div>
+        <input type="range" class="vfader" min="0" max="1" step="0.01" value="1" aria-label="Volume deck A">
+        <output class="gain-out">0.0 dB</output>
+      </div>
+      <div class="ch" data-ch="B">
+        <div class="label">B</div>
+        <div class="vu"><i></i></div>
+        <input type="range" class="vfader" min="0" max="1" step="0.01" value="1" aria-label="Volume deck B">
+        <output class="gain-out">0.0 dB</output>
+      </div>
+      <div class="xfade">
+        <input type="range" id="xfader" min="-1" max="1" step="0.01" value="0" aria-label="Crossfader">
+        <div class="xf-labels"><span>A</span><button class="mini-btn" id="xfCenter" type="button">Center</button><span>B</span></div>
+      </div>
+    </div>
+    <div class="deck panel" id="deckB" data-deck="B"></div>
+  </section>
+
+  <section class="browser panel">
+    <nav class="tabs" role="tablist">
+      <button role="tab" type="button" data-tab="library" aria-selected="true">Library</button>
+      <button role="tab" type="button" data-tab="files">Files</button>
+      <button role="tab" type="button" data-tab="mashup">Mashup ideas</button>
+      <button role="tab" type="button" data-tab="mixout">Mix ideas</button>
+      <button role="tab" type="button" data-tab="set">Build set</button>
+      <button role="tab" type="button" data-tab="loud">Loudness</button>
+      <button role="tab" type="button" data-tab="saved">Saved mashups <span class="count" id="savedCount"></span></button>
+    </nav>
+
+    <!-- Library -->
+    <div class="tabpane" data-pane="library">
+      <aside class="pl-side">
+        <div class="label">Playlists</div>
+        <ul class="pl-list" id="plList"></ul>
+      </aside>
+      <div class="lib-main">
+        <div class="lib-tools">
+          <input type="search" id="search" placeholder="Search: title, artist, key (8A), BPM …" aria-label="Search library">
+          <span class="sel-info" id="selInfo"></span>
+          <div class="sel-actions" id="selActions">
+            <button class="btn small" type="button" data-sel="process">Process loudness</button>
+            <button class="btn small" type="button" data-sel="tags">Write tags</button>
+            <button class="btn small" type="button" data-sel="playlist">Save as playlist</button>
+            <button class="btn small" type="button" data-sel="set">Build set</button>
+            <button class="btn small" type="button" data-sel="reanalyze">Re-analyze</button>
+          </div>
+        </div>
+        <div class="table-wrap" id="libWrap">
+          <table class="lib" id="libTable">
+            <thead><tr>
+              <th class="c-sel"><input type="checkbox" id="selAll" aria-label="Select all"></th>
+              <th class="c-load"></th>
+              <th data-sort="title">Title</th>
+              <th data-sort="key" class="c-key">Key</th>
+              <th data-sort="bpm" class="c-num">BPM</th>
+              <th data-sort="energy" class="c-num">Energy</th>
+              <th data-sort="lufs" class="c-num" title="Integrated loudness">LUFS</th>
+              <th data-sort="gain" class="c-num" title="Gain to reach the target loudness">Gain</th>
+              <th data-sort="duration" class="c-num">Length</th>
+              <th data-sort="status">Status</th>
+            </tr></thead>
+            <tbody id="libBody"></tbody>
+          </table>
+          <p class="empty-lib" id="libEmpty" hidden>No tracks yet. Load your <b>Rekordbox collection</b> or add a <b>folder</b>.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- File browser: USB sticks, drives and folders -->
+    <div class="tabpane" data-pane="files" hidden>
+      <aside class="pl-side">
+        <div class="label">Locations</div>
+        <ul class="pl-list" id="fsRoots"></ul>
+      </aside>
+      <div class="lib-main">
+        <div class="lib-tools">
+          <button class="mini-btn" id="fsUp" type="button" aria-label="Up one folder">↑ Up</button>
+          <nav class="crumbs" id="fsCrumbs" aria-label="Current folder"></nav>
+          <div class="spacer"></div>
+          <label class="ctl"><input type="checkbox" id="fsRec" checked> incl. subfolders</label>
+          <button class="btn small primary" id="fsAdd" type="button">Add this folder to library</button>
+        </div>
+        <div class="table-wrap">
+          <table class="lib">
+            <thead><tr>
+              <th class="c-load"></th>
+              <th>Name</th>
+              <th class="c-key">Key</th>
+              <th class="c-num">BPM</th>
+              <th class="c-num">Energy</th>
+              <th>Status</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="fsBody"></tbody>
+          </table>
+          <p class="empty-lib" id="fsEmpty" hidden></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mashup ideas -->
+    <div class="tabpane" data-pane="mashup" hidden>
+      <div class="sugg-head">
+        <p class="sugg-for" id="mashFor">Load a track into deck A. Tracks that work on top of it will appear here.</p>
+        <label class="ctl">From <select id="mashPool"></select></label>
+        <label class="ctl">Key shift up to <select id="mashShift"><option value="0">off</option><option value="1">±1</option><option value="2" selected>±2</option><option value="3">±3</option></select></label>
+      </div>
+      <div class="sugg-list" id="mashList"></div>
+    </div>
+
+    <!-- Mixout ideas -->
+    <div class="tabpane" data-pane="mixout" hidden>
+      <div class="sugg-head">
+        <p class="sugg-for" id="mixFor">Load a track into a deck. Good next tracks for the transition will appear here.</p>
+        <label class="ctl">From <select id="mixPool"></select></label>
+      </div>
+      <div class="sugg-list" id="mixList"></div>
+    </div>
+
+    <!-- Set builder -->
+    <div class="tabpane" data-pane="set" hidden>
+      <div class="sugg-head">
+        <label class="ctl">Tracks from <select id="setSource"></select></label>
+        <label class="ctl">Energy curve <select id="setCurve"><option value="rise">Rising</option><option value="peak">Build, peak, cool-down</option><option value="flat">Steady</option></select></label>
+        <button class="btn primary small" id="setRun" type="button">Order harmonically</button>
+        <button class="btn small" id="setSave" type="button" disabled>Save as playlist</button>
+      </div>
+      <ol class="set-list" id="setList"></ol>
+    </div>
+
+    <!-- Loudness -->
+    <div class="tabpane loud-pane" data-pane="loud" hidden>
+      <div class="loud-grid">
+        <section class="loud-card">
+          <h3>Level during playback</h3>
+          <p class="muted">Key Master plays every track at the target loudness. Your files stay unchanged. A limiter on the output prevents clipping.</p>
+          <div class="preset-cards" id="presetCards" role="radiogroup" aria-label="Target loudness"></div>
+        </section>
+        <section class="loud-card">
+          <h3>Process files</h3>
+          <p class="muted">Creates a processed copy of each track at the target loudness. The original is kept. The copy can replace the original in Rekordbox; cues and grid are kept.</p>
+          <label class="check"><input type="checkbox" id="optRepair"> <span><b>Repair clipped peaks</b><br><small>Rebuilds flattened waveform peaks (clipping).</small></span></label>
+          <label class="check"><input type="checkbox" id="optContrast"> <span><b>Boost contrast</b><br><small>Quiet parts a bit quieter, loud parts a bit louder (max. ±1.5 dB).</small></span></label>
+          <div class="out-mode">
+            <label class="radio"><input type="radio" name="outMode" value="suffix"> Next to the original as <code>Title_KM.mp3</code></label>
+            <label class="radio"><input type="radio" name="outMode" value="folder"> In folder <input type="text" id="outFolder" class="txt" aria-label="Output folder"></label>
+          </div>
+        </section>
+        <section class="loud-card loud-stats">
+          <h3>Your library</h3>
+          <div class="hist" id="loudHist" aria-label="Loudness distribution"></div>
+          <p class="muted" id="loudSummary"></p>
+          <div class="loud-actions">
+            <button class="btn primary" id="procSel" type="button">Process selected</button>
+            <button class="btn" id="procOff" type="button">Process all outside ±2 dB</button>
+          </div>
+          <ul class="proc-list" id="procList"></ul>
+        </section>
+      </div>
+    </div>
+
+    <!-- Saved mashups -->
+    <div class="tabpane" data-pane="saved" hidden>
+      <div class="sugg-list" id="savedList"></div>
+    </div>
+  </section>
+</main>
+
+<template id="deckTpl">
+  <div class="d-head">
+    <div class="d-letter"></div>
+    <div class="d-track">
+      <div class="track-name">Empty</div>
+      <div class="track-meta">Drag a track here from the library or click <b class="ld"></b></div>
+    </div>
+    <div class="d-key">
+      <div class="label">Key</div>
+      <div class="key-row">
+        <button class="mini-btn k-down" type="button" aria-label="Key one semitone down">−</button>
+        <span class="key-chip">–</span>
+        <button class="mini-btn k-up" type="button" aria-label="Key one semitone up">+</button>
+      </div>
+      <div class="sub k-sub">&nbsp;</div>
+    </div>
+    <div class="d-bpm">
+      <div class="label">BPM</div>
+      <div class="big bpm">–</div>
+      <div class="sub bpm-sub">&nbsp;</div>
+    </div>
+    <div class="d-loud">
+      <div class="label">Loudness</div>
+      <div class="lufs">–</div>
+      <div class="ag-badge" hidden></div>
+    </div>
+  </div>
+
+  <div class="zoom-wrap">
+    <canvas class="zoom-cv"></canvas>
+    <div class="wave-msg">No track loaded</div>
+    <div class="zoom-ctl">
+      <button type="button" class="z-out" aria-label="Zoom out">−</button>
+      <button type="button" class="z-in" aria-label="Zoom in">+</button>
+    </div>
+  </div>
+  <div class="ov-wrap"><canvas class="ov-cv"></canvas></div>
+
+  <div class="grid-bar" hidden>
+    <span class="label">Grid</span>
+    <button class="mini-btn g-left" type="button" title="Grid left (Shift: 1 ms)">◀ 5 ms</button>
+    <button class="mini-btn g-right" type="button" title="Grid right (Shift: 1 ms)">5 ms ▶</button>
+    <button class="mini-btn g-down" type="button" title="Set bar start at the current position">1.1 here</button>
+    <span class="g-bpm">
+      <button class="mini-btn g-bm" type="button" title="BPM −0.01 (Shift: −0.1)">−</button>
+      <input class="g-bpm-in" type="number" step="0.01" min="40" max="250" aria-label="BPM">
+      <button class="mini-btn g-bp" type="button" title="BPM +0.01 (Shift: +0.1)">+</button>
+    </span>
+    <button class="mini-btn g-half" type="button">÷2</button>
+    <button class="mini-btn g-dbl" type="button">×2</button>
+    <button class="mini-btn g-tap" type="button" title="Tap along with the beat">TAP</button>
+    <button class="mini-btn g-metro" type="button" aria-pressed="false" title="Metronome on the grid">Metronome</button>
+    <button class="mini-btn g-reset" type="button" title="Restore the detected grid">Reset</button>
+    <span class="g-hint">Drag the waveform to move the grid</span>
+  </div>
+
+  <div class="transport">
+    <button class="play" type="button" aria-label="Play"></button>
+    <button class="cue-btn" type="button" title="Cue: set while stopped, jump back while playing">CUE</button>
+    <div class="clock"><b class="t-now">0:00.0</b><span class="t-rem">−0:00.0</span></div>
+    <div class="spacer"></div>
+    <button class="tog sync" type="button" aria-pressed="false" title="Match tempo and bar to the other deck">SYNC</button>
+    <button class="tog keylock" type="button" aria-pressed="true" title="Keep the pitch when changing tempo">KEY LOCK</button>
+    <button class="tog grid-tog" type="button" aria-pressed="false" title="Edit beatgrid (G)">GRID</button>
+  </div>
+
+  <div class="tempo-row">
+    <span class="label">Tempo</span>
+    <input type="range" class="tempo" min="-8" max="8" step="0.01" value="0" aria-label="Tempo">
+    <output class="tempo-out">±0.00 %</output>
+    <select class="tempo-range" aria-label="Tempo range"><option value="8">±8</option><option value="16">±16</option><option value="50">±50</option></select>
+    <button class="mini-btn tempo-reset" type="button">0</button>
+  </div>
+
+  <div class="loop-row">
+    <span class="label">Loop</span>
+    <div class="seg loops">
+      <button type="button" data-beats="1">1</button><button type="button" data-beats="2">2</button><button type="button" data-beats="4">4</button><button type="button" data-beats="8">8</button><button type="button" data-beats="16">16</button><button type="button" data-beats="32">32</button>
+    </div>
+    <button class="mini-btn loop-off" type="button" disabled>Loop off</button>
+    <div class="spacer"></div>
+    <span class="label">Stems</span>
+    <div class="seg stems" role="radiogroup" aria-label="Stems">
+      <button type="button" data-stem="mix" aria-pressed="true">Mix</button><button type="button" data-stem="vocals">Vocals</button><button type="button" data-stem="instrumental">Instr.</button>
+    </div>
+    <button class="mini-btn stem-exp" type="button" title="Export the current stem (with key shift)" disabled>Export</button>
+  </div>
+
+  <div class="pads"></div>
+</template>
+
+<div class="dialog-back" id="dlgBack" hidden>
+  <div class="dialog panel" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle"></h3>
+    <div id="dlgBody"></div>
+    <div class="dlg-actions" id="dlgActions"></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="/app/app.js"></script>
+</body>
+</html>
