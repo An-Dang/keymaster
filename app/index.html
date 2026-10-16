@@ -76,6 +76,9 @@
         <input type="range" id="xfader" min="-1" max="1" step="0.01" value="0" aria-label="Crossfader">
         <div class="xf-labels"><span>A</span><button class="mini-btn" id="xfCenter" type="button">Center</button><span>B</span></div>
       </div>
+      <div class="xfade">
+        <button class="tog q-tog" id="quantBtn" type="button" aria-pressed="true" title="Snap cues and loops to the beat; hot cue jumps keep the beat phase">QUANTIZE</button>
+      </div>
     </div>
     <div class="deck panel" id="deckB" data-deck="B"></div>
   </section>
@@ -310,7 +313,13 @@
       <button type="button" data-beats="1">1</button><button type="button" data-beats="2">2</button><button type="button" data-beats="4">4</button><button type="button" data-beats="8">8</button><button type="button" data-beats="16">16</button><button type="button" data-beats="32">32</button>
     </div>
     <button class="mini-btn loop-off" type="button" disabled>Loop off</button>
-    <div class="spacer"></div>
+    <span class="label">Jump</span>
+    <div class="seg jumps" aria-label="Beat jump">
+      <button type="button" data-jump="-16" aria-label="Jump back 16 beats">◀16</button><button type="button" data-jump="-4" aria-label="Jump back 4 beats">◀4</button><button type="button" data-jump="-1" aria-label="Jump back 1 beat">◀1</button><button type="button" data-jump="1" aria-label="Jump forward 1 beat">1▶</button><button type="button" data-jump="4" aria-label="Jump forward 4 beats">4▶</button><button type="button" data-jump="16" aria-label="Jump forward 16 beats">16▶</button>
+    </div>
+  </div>
+
+  <div class="loop-row">
     <span class="label">Stems</span>
     <div class="seg stems" role="radiogroup" aria-label="Stems">
       <button type="button" data-stem="mix" aria-pressed="true">Mix</button><button type="button" data-stem="vocals">Vocals</button><button type="button" data-stem="instrumental">Instr.</button>

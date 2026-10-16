@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "out_folder": str(Path.home() / "Music" / "Key Master" / "Processed"),
     "notation": "camelot",
     "auto_analyze": True,
+    "quantize": True,  # snap cues/loops to the beat and keep beat phase on hot cue jumps
     "folders": [],  # folders added to the library (shown in the sidebar)
 }
 

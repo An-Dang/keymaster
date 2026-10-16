@@ -247,7 +247,7 @@ class Deck {
   }
   seek(t) { this.audio.currentTime = clamp(t, 0, Math.max(0, this.dur - 0.05)); this.dirty = true; }
   quantize(t) {
-    if (!this.per) return t;
+    if (!this.per || !S.settings.quantize) return t;
     const k = Math.round((t - this.fb) / this.per);
     return Math.max(0, this.fb + k * this.per);
   }
@@ -309,10 +309,23 @@ class Deck {
   setLoop(beats) {
     if (!this.per) { toast('Loops need a track with a beatgrid.'); return; }
     if (this.loop && this.loop.beats === beats) { this.loop = null; this.renderLoop(); return; }
-    const start = this.loop ? this.loop.a : this.fb + Math.floor((this.time - this.fb) / this.per + 0.02) * this.per;
+    const start = this.loop ? this.loop.a : (S.settings.quantize ? this.fb + Math.floor((this.time - this.fb) / this.per + 0.02) * this.per : this.time);
     this.loop = { a: Math.max(0, start), b: Math.max(0, start) + beats * this.per, beats };
     if (this.time > this.loop.b || this.time < this.loop.a) this.seek(this.loop.a);
     this.renderLoop();
+  }
+
+  // Seconds from the nearest beat (negative = just before it); 0 when quantize is off.
+  beatOffset() {
+    if (!this.per || !S.settings.quantize) return 0;
+    return this.time - this.quantize(this.time);
+  }
+  jump(beats) {
+    if (!this.per) { toast('Beat jump needs a track with a beatgrid.'); return; }
+    const d = beats * this.per;
+    if (this.time + d < 0 || this.time + d > this.dur) return; // clamping would break the beat phase
+    if (this.loop) { this.loop.a += d; this.loop.b += d; this.renderLoop(); }
+    this.seek(this.time + d);
   }
 
   /* ----- hot cues ----- */
@@ -322,7 +335,9 @@ class Deck {
     if (cues[i] && (e.shiftKey || e.type === 'contextmenu')) {
       cues[i] = null; this.saveTrack({ cues }); toast(`Hot cue ${CUE_LETTERS[i]} deleted`);
     } else if (cues[i]) {
-      this.seek(cues[i].t); if (!this.playing) { ensureCtx(); this.audio.play().catch(() => {}); }
+      // Quantized jump while playing: land at the same offset to the beat as now, so the deck stays in phase.
+      this.seek(cues[i].t + (this.playing ? this.beatOffset() : 0));
+      if (!this.playing) { ensureCtx(); this.audio.play().catch(() => {}); }
     } else {
       const t = e.altKey ? this.time : this.quantize(this.time);
       cues[i] = { t: Math.round(t * 1000) / 1000, name: '' };
@@ -445,6 +460,7 @@ class Deck {
     q('.grid-tog').addEventListener('click', () => this.toggleGrid());
     $$('.loops button', this.root).forEach((b) => b.addEventListener('click', () => this.setLoop(parseInt(b.dataset.beats, 10))));
     q('.loop-off').addEventListener('click', () => { this.loop = null; this.renderLoop(); });
+    $$('.jumps button', this.root).forEach((b) => b.addEventListener('click', () => this.jump(parseInt(b.dataset.jump, 10))));
     $$('.stems button', this.root).forEach((b) => b.addEventListener('click', () => this.setVariant(b.dataset.stem, this.pending ? this.pending.shift : this.shift)));
     q('.stem-exp').addEventListener('click', () => this.exportStem());
     q('.z-in').addEventListener('click', () => { this.zoomSec = clamp(this.zoomSec / 1.5, 1, 64); this.dirty = true; });
@@ -744,6 +760,7 @@ $$('.ch').forEach((ch) => {
   $('.vfader', ch).addEventListener('input', (e) => { d.fader = parseFloat(e.target.value); d.applyGain(); });
 });
 $('#xfader').addEventListener('input', (e) => { AU.xf = parseFloat(e.target.value); Object.values(DECKS).forEach((d) => d.applyGain()); });
+$('#quantBtn').addEventListener('click', () => saveSettings({ quantize: !S.settings.quantize }));
 $('#xfCenter').addEventListener('click', () => { AU.xf = 0; $('#xfader').value = 0; Object.values(DECKS).forEach((d) => d.applyGain()); });
 
 /* ---------- loudness controls ---------- */
@@ -763,6 +780,7 @@ function renderLoudCtl() {
   $('#optContrast').checked = !!S.settings.contrast;
   $$('input[name="outMode"]').forEach((r) => { r.checked = r.value === S.settings.out_mode; });
   $('#outFolder').value = S.settings.out_folder || '';
+  $('#quantBtn').setAttribute('aria-pressed', String(!!S.settings.quantize));
 }
 async function saveSettings(patch) {
   Object.assign(S.settings, patch);
@@ -1311,6 +1329,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'g' || e.key === 'G') d.toggleGrid();
   else if (d.grid && e.key === 'ArrowLeft') { e.preventDefault(); d.gridShift(e.shiftKey ? -0.001 : -0.005); }
   else if (d.grid && e.key === 'ArrowRight') { e.preventDefault(); d.gridShift(e.shiftKey ? 0.001 : 0.005); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); d.jump((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 4 : 1)); }
   else if (e.key === 'Tab' && e.altKey) { e.preventDefault(); S.focus = S.focus === 'A' ? 'B' : 'A'; }
 });
 
