@@ -19,10 +19,10 @@ To start with a separate, empty library: `KEYMASTER_DATA=~/Music/"Key Master Tes
 | Area | What it does |
 | --- | --- |
 | Files | Browse USB sticks, drives and folders; load a file straight into deck A/B (it is added to the library and analyzed first) or add a whole folder (with or without subfolders). Added folders show up as filters in the library sidebar and can be removed again (files stay on disk) |
-| Decks A and B | Play, tempo ±8/16/50 %, key lock, SYNC (tempo and bar), QUANTIZE (cues and loops snap to the beat, hot cue jumps keep the beat phase), beat jump ±1/4/16 (← / →, Shift = 4), loops of 1–32 beats, 8 hot cues (nameable), zoomed and overview waveform |
+| Decks A and B | Play, tempo ±8/16/50 %, key lock, SYNC (tempo and bar), QUANTIZE (cues and loops snap to the beat, hot cue jumps keep the beat phase), beat jump ±1/4/16, arrow keys walk the grid like the browser tool (paused: ← / → land on the previous/next beat line, Shift = 4 beats; playing: jump keeping the phase; Home = start), loops of 1–32 beats, 8 hot cues (nameable), zoomed and overview waveform |
 | Key shift | Per deck ± semitones without changing tempo (result is cached) |
 | Stems | Mix / vocals / instrumental with one click (Demucs, runs on the Apple GPU), export as FLAC with key shift to `~/Music/Key Master/Stems` |
-| Beatgrid (GRID) | Move the grid in 5 ms or 1 ms steps or drag it in the waveform, "1.1 here", BPM ±0.01/0.1 or type it in, ÷2/×2, TAP, metronome, reset |
+| Beatgrid (GRID) | Move the grid in 5 ms or 1 ms steps (buttons or Alt+← / →) or drag it in the waveform, "1.1 here", BPM ±0.01/0.1 or type it in, ÷2/×2, TAP, metronome, reset |
 | Mashup ideas | Tracks that fit deck A, including a key shift suggestion, filterable by playlist or genre; save and rate pairs |
 | Mix ideas | Good next tracks by key, tempo and energy |
 | Build set | Order a playlist or selection harmonically (rising, peak, steady) and save it as a playlist |

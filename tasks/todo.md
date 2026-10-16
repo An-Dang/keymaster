@@ -21,3 +21,11 @@ Goal: keep the mix on the grid. Builds on the existing grid (`bpm`, `first_beat`
 - Fix found in testing: a jump past the track start/end is ignored instead of clamped, because clamping broke the beat phase.
 - Stems moved to their own row so Loop + Jump fit on one line.
 - Not checked: by-ear listening, behaviour on very short tracks with variable tempo (grid is constant-tempo only).
+
+## Arrow keys walk the grid like the browser tool (2026-10-16)
+
+- [x] Paused: ← / → land exactly on the previous/next beat line, Shift = 4 beats (as in ui.html)
+- [x] Playing: ← / → beat jump that keeps the phase (unchanged)
+- [x] GRID mode: grid shifting moved to Alt+← / → (Shift = 1 ms), Home = track start
+- [x] Verified with real key presses: 63.73 → 64 → 68 → 67 beats, Alt+→ moved the grid 5 ms without moving the playhead, Home → 0:00
+- Not checked: arrow keys while playing with real key presses (same jump() path as the tested buttons)

@@ -328,6 +328,15 @@ class Deck {
     this.seek(this.time + d);
   }
 
+  // Paused navigation like the original browser tool: land exactly on the next/previous grid line.
+  stepGrid(beats) {
+    if (!this.per) { toast('Stepping needs a track with a beatgrid.'); return; }
+    const k = (this.time - this.fb) / this.per;
+    const line = beats > 0 ? Math.floor(k + 1e-4) : Math.ceil(k - 1e-4);
+    const t = this.fb + (line + beats) * this.per;
+    if (t >= 0 && t <= this.dur) this.seek(t);
+  }
+
   /* ----- hot cues ----- */
   padClick(i, e) {
     if (!this.t) return;
@@ -1322,14 +1331,16 @@ async function exportDialog(kind) {
 
 /* ---------- keyboard ---------- */
 document.addEventListener('keydown', (e) => {
-  if (e.target.closest('input, select, textarea') || !$('#dlgBack').hidden) return;
+  if (e.target.closest('input, select, textarea') || !$('#dlgBack').hidden || e.metaKey || e.ctrlKey) return;
   const d = focused();
+  const arrow = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
   if (e.code === 'Space') { e.preventDefault(); d.toggle(); }
   else if (/^Digit[1-8]$/.test(e.code)) d.padClick(parseInt(e.code.slice(5), 10) - 1, e);
   else if (e.key === 'g' || e.key === 'G') d.toggleGrid();
-  else if (d.grid && e.key === 'ArrowLeft') { e.preventDefault(); d.gridShift(e.shiftKey ? -0.001 : -0.005); }
-  else if (d.grid && e.key === 'ArrowRight') { e.preventDefault(); d.gridShift(e.shiftKey ? 0.001 : 0.005); }
-  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); d.jump((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 4 : 1)); }
+  else if (arrow && e.altKey && d.grid) { e.preventDefault(); d.gridShift(arrow * (e.shiftKey ? 0.001 : 0.005)); }
+  // Arrows walk the grid (Shift = 4 beats): paused they land on the grid lines, playing they jump and keep the phase.
+  else if (arrow) { e.preventDefault(); const n = arrow * (e.shiftKey ? 4 : 1); if (d.playing) d.jump(n); else d.stepGrid(n); }
+  else if (e.key === 'Home') { e.preventDefault(); d.seek(0); }
   else if (e.key === 'Tab' && e.altKey) { e.preventDefault(); S.focus = S.focus === 'A' ? 'B' : 'A'; }
 });
 
