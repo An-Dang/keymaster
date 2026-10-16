@@ -40,7 +40,7 @@ DEFAULT_SETTINGS = {
 
 
 GRID_SINCE = 1792135378  # grid detection switched to Beat This! beats/downbeats; older analyses get redone
-AUTO_CUE_NAMES = {"Start", "Drop", "Break"}  # names phrase_cues() gives; other names mean the user edited the cues
+AUTO_CUE_NAMES = {"Start", "Drop", "Break", "Outro"}  # names phrase_cues() gives; other names mean the user edited the cues
 
 
 # ---------- jobs ----------
@@ -178,7 +178,7 @@ def create_app() -> FastAPI:
             if not any(t["cues"]) or (grid_auto and auto_named):
                 cues = [None] * 8
                 for c in r.cues:
-                    cues[c.slot] = {"t": round(c.t, 3), "name": c.name}
+                    cues[c.slot] = {"t": round(c.t, 3), "name": c.name} | ({"end": c.end} if c.end else {})
                 upd["cues"] = cues
             lib.update(tid, **upd)
             return {"track_id": tid}
@@ -202,7 +202,26 @@ def create_app() -> FastAPI:
             if t["status"] == "missing" and os.path.exists(t["path"]):
                 enqueue_analysis(t["id"], priority)
 
+    def add_outro_loops():
+        """One pass (synchronous, so it cannot stop half way): give analysed tracks the Outro loop on pad H
+        when H is free or holds an automatic cue. Runs once; an Outro the user deletes later stays deleted."""
+        if lib.settings().get("outro_added"):
+            return
+        for t in lib.tracks():
+            cues = t["cues"]
+            if not t.get("bpm") or not t.get("duration") or any(c and c.get("name") == "Outro" for c in cues):
+                continue
+            h = cues[analysis.OUTRO_SLOT]
+            if h and h.get("name") not in AUTO_CUE_NAMES:
+                continue
+            o = analysis.outro_cue(t["duration"], t["bpm"], t.get("first_beat") or 0.0)
+            if o:
+                cues[o.slot] = {"t": o.t, "name": o.name, "end": o.end}
+                lib.update(t["id"], cues=cues)
+        lib.set_settings(outro_added=True)
+
     def watch():
+        add_outro_loops()
         enqueue_missing()
         while True:
             regrid_old()

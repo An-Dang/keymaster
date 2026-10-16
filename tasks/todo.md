@@ -16,3 +16,12 @@ and `<audio>` seeks landed ~50 ms late (SYNC only corrected slowly).
 - Root causes were the grids and the `<audio>` element, not QUANTIZE itself.
 - Not checked: listening by ear; long sessions (memory: decoded track ~50–100 MB per deck); AIFF/ALAC playback now goes through server decoding (untested with a real AIFF in the browser).
 - Known limit: actions are audible after the stretcher latency (~120 ms), but they land on the beat.
+
+## Loop cues + Outro loop (2026-10-16)
+
+- [x] Empty pad pressed inside a running loop saves the loop as a loop cue (`{t, end}`); triggering it switches the loop on (beat-phase kept while playing)
+- [x] Auto cues: "Outro" on pad H = 4-beat loop at the start of the last full 8-bar phrase; drops/breaks use B–G
+- [x] Existing tracks: one synchronous pass adds the Outro on H when H is free or automatic (user cues untouched; a deleted Outro stays deleted)
+- [x] Rekordbox: XML `Type="4"` with `End`; direct write sets `OutMsec/OutFrame`; import keeps loop ends
+- [x] Verified: migration (Outro on beats 896/320/512 = phrase starts, own H cue kept), XML, DB copy write + re-import, browser save/trigger loop cue and Outro loop
+- Not checked: how Rekordbox itself shows the loop cues after import (only the data was checked)

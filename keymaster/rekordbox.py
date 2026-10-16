@@ -151,10 +151,11 @@ def set_cues(db: MasterDatabase, content, cues: list[Cue], memory: list[float], 
     existing = db.get_cue(ContentID=content.ID).all()
     by_kind = {c.Kind: c for c in existing if c.Kind in HOT_KIND}
     mem_ms = [c.InMsec for c in existing if c.Kind == MEMORY_KIND]
-    todo = [(HOT_KIND[c.slot], c.t, c.name) for c in cues if 0 <= c.slot < 8]
-    todo += [(MEMORY_KIND, t, "") for t in memory]
-    for kind, t, name in todo:
+    todo = [(HOT_KIND[c.slot], c.t, c.name, c.end) for c in cues if 0 <= c.slot < 8]
+    todo += [(MEMORY_KIND, t, "", None) for t in memory]
+    for kind, t, name, end in todo:
         ms = int(round(t * 1000))
+        out_ms, out_frame = (int(round(end * 1000)), int(round(end * FRAMES_PER_SEC))) if end else (-1, 0)
         label = f"{'ABCDEFGH'[HOT_KIND.index(kind)]}" if kind else "Memory"
         if kind == MEMORY_KIND:
             if any(abs(ms - m) < 50 for m in mem_ms):
@@ -162,19 +163,20 @@ def set_cues(db: MasterDatabase, content, cues: list[Cue], memory: list[float], 
             mem_ms.append(ms)
         elif kind in by_kind:
             row = by_kind[kind]
-            if not overwrite or (abs(row.InMsec - ms) < 5 and (row.Comment or "") == name):
+            if not overwrite or (abs(row.InMsec - ms) < 5 and (row.Comment or "") == name and row.OutMsec == out_ms):
                 continue
             row.InMsec, row.InFrame, row.Comment = ms, int(round(t * FRAMES_PER_SEC)), name
+            row.OutMsec, row.OutFrame = out_ms, out_frame
             ch.cues.append(f"{label} {_fmt(t)} {name} (replaced)".rstrip())
             continue
         db.add(DjmdCue.create(
             ID=str(db.generate_unused_id(DjmdCue)), ContentID=content.ID, ContentUUID=content.UUID,
             InMsec=ms, InFrame=int(round(t * FRAMES_PER_SEC)), InMpegFrame=0, InMpegAbs=0,
-            OutMsec=-1, OutFrame=0, OutMpegFrame=0, OutMpegAbs=0,
+            OutMsec=out_ms, OutFrame=out_frame, OutMpegFrame=0, OutMpegAbs=0,
             Kind=kind, Color=-1, ColorTableIndex=None, ActiveLoop=0, Comment=name,
             BeatLoopSize=0, CueMicrosec=0, UUID=str(uuid4()),
         ))
-        ch.cues.append(f"{label} {_fmt(t)} {name}".rstrip())
+        ch.cues.append(f"{label} {_fmt(t)} {name}{' (loop)' if end else ''}".rstrip())
     if ch.cues:
         content.CueUpdated = str(int(content.CueUpdated or 0) + 1)
 
@@ -203,7 +205,8 @@ def read_xml(file: Path) -> list[XmlTrack]:
         for pm in tr.iter("POSITION_MARK"):
             t, num = float(pm.get("Start", 0)), int(pm.get("Num", -1))
             if 0 <= num < 8:
-                cues.append(Cue(num, t, pm.get("Name", "")))
+                end = float(pm.get("End")) if pm.get("Type") == "4" and pm.get("End") else None
+                cues.append(Cue(num, t, pm.get("Name", ""), end))
             elif num == -1:
                 memory.append(t)
         size = tr.get("Size")
@@ -273,7 +276,8 @@ def import_collection(lib, db_path: Path | None = None, progress=None) -> dict:
             for q in db.get_cue(ContentID=c.ID).all():
                 tt = (q.InMsec or 0) / 1000
                 if q.Kind in HOT_KIND:
-                    cues[HOT_KIND.index(q.Kind)] = {"t": tt, "name": q.Comment or ""}
+                    cues[HOT_KIND.index(q.Kind)] = {"t": tt, "name": q.Comment or ""} | (
+                        {"end": q.OutMsec / 1000} if (q.OutMsec or -1) > 0 else {})
                 elif q.Kind == MEMORY_KIND:
                     mem.append(tt)
             upd["cues"] = cues
@@ -340,7 +344,8 @@ def build_xml(tracks: list[dict], playlists: list[tuple[str, list[int]]], notati
         for n, c in cues:
             col = HOT_COLORS[n].lstrip("#")
             r, g, b = (int(col[i:i + 2], 16) for i in (0, 2, 4))
-            kids.append(f'      <POSITION_MARK Name="{_esc(c.get("name") or "")}" Type="0" Start="{c["t"]:.3f}" '
+            loop = f'Type="4" Start="{c["t"]:.3f}" End="{c["end"]:.3f}"' if c.get("end") else f'Type="0" Start="{c["t"]:.3f}"'
+            kids.append(f'      <POSITION_MARK Name="{_esc(c.get("name") or "")}" {loop} '
                         f'Num="{n}" Red="{r}" Green="{g}" Blue="{b}"/>')
         attrs = " ".join(f'{k_}="{_esc(v)}"' for k_, v in a.items())
         out.append(f"    <TRACK {attrs}>\n" + "\n".join(kids) + "\n    </TRACK>" if kids else f"    <TRACK {attrs}/>")
@@ -376,7 +381,7 @@ def write_tracks(tracks: list[dict], playlists: list[tuple[str, list[int]]] = ()
         k = keys.parse(t.get("key") or "")
         if k:
             set_key(db, c, k, notation, overwrite, ch)
-        cues = [Cue(n, q["t"], q.get("name") or "") for n, q in enumerate(t.get("cues") or []) if q]
+        cues = [Cue(n, q["t"], q.get("name") or "", q.get("end")) for n, q in enumerate(t.get("cues") or []) if q]
         set_cues(db, c, cues, list(t.get("memory") or []), overwrite, ch)
         changes.append(ch)
     for name, ids in playlists:

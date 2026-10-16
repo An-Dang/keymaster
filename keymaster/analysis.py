@@ -33,6 +33,22 @@ class Cue:
     slot: int  # hot cue pad 0..7 (A..H)
     t: float  # seconds
     name: str = ""
+    end: float | None = None  # loop end (seconds) for a loop cue
+
+
+OUTRO_SLOT = 7  # pad H
+OUTRO_LOOP_BEATS = 4
+
+
+def outro_cue(duration: float, bpm: float, first_beat: float, phrase_beats: int = 32) -> Cue | None:
+    """4-beat loop at the start of the last full 8-bar phrase: the usual mix-out point, loopable to extend it."""
+    period = 60.0 / bpm
+    phrase = phrase_beats * period
+    n = int((duration - first_beat) // phrase)
+    if n < 2:
+        return None
+    t = first_beat + (n - 1) * phrase
+    return Cue(OUTRO_SLOT, round(t, 3), "Outro", round(t + OUTRO_LOOP_BEATS * period, 3))
 
 
 @dataclass
@@ -233,8 +249,8 @@ def phrase_cues(y: np.ndarray, sr: int, low: np.ndarray, bpm: float, first_beat:
                 max_cues: int = 8, phrase_beats: int = 32, min_change_db: float = 4.0) -> list[Cue]:
     """Hot cues at 8-bar phrase boundaries where the bass energy jumps (Drop) or falls away (Break).
 
-    Pad A is the first audible beat. A heuristic for 4/4 dance music; it assumes the grid's
-    first beat is a downbeat, as Rekordbox does.
+    Pad A is the first audible beat, pads B-G the biggest drops/breaks, pad H a 4-beat Outro loop.
+    A heuristic for 4/4 dance music; it assumes the grid's first beat is a downbeat, as Rekordbox does.
     """
     period = 60.0 / bpm
     duration = len(y) / sr
@@ -243,6 +259,10 @@ def phrase_cues(y: np.ndarray, sr: int, low: np.ndarray, bpm: float, first_beat:
     t0 = first_beat + np.ceil((start - first_beat) / period - 0.25) * period
     t0 = max(t0, first_beat)
     cues = [Cue(0, float(t0), "Start")]
+    outro = outro_cue(duration, bpm, first_beat, phrase_beats)
+    if outro:
+        cues.append(outro)
+        max_cues -= 1
 
     bounds = np.arange(t0, duration, phrase_beats * period)
     if len(bounds) < 3:
@@ -260,7 +280,7 @@ def phrase_cues(y: np.ndarray, sr: int, low: np.ndarray, bpm: float, first_beat:
     cands.sort(reverse=True)
     picked = sorted(cands[: max_cues - 1], key=lambda c: c[1])
     cues += [Cue(i + 1, t, name) for i, (_, t, name) in enumerate(picked)]
-    return cues
+    return sorted(cues, key=lambda c: c.slot)
 
 
 WAVE_RATE = 150  # waveform columns per second

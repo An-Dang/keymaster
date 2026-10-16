@@ -446,13 +446,23 @@ class Deck {
     const cues = this.t.cues || (this.t.cues = Array(8).fill(null));
     if (cues[i] && (e.shiftKey || e.type === 'contextmenu')) {
       cues[i] = null; this.saveTrack({ cues }); toast(`Hot cue ${CUE_LETTERS[i]} deleted`);
-    } else if (cues[i] && this._playing) {
-      // Quantized jump: land at the same offset to the beat as now, so the deck stays in phase.
-      const at = this.when(), p = this.posAt(at);
-      this.seek(cues[i].t + (p - this.quantize(p)), at);
     } else if (cues[i]) {
-      // Paused: only move the playhead there (and make it the CUE point), e.g. to start both decks with Play A+B.
-      this.cuePoint = cues[i].t; this.seek(cues[i].t);
+      const c = cues[i];
+      // A loop cue switches its loop on; the jump below then lands inside it.
+      if (c.end) { this.loop = { a: c.t, b: c.end, beats: this.per ? Math.round((c.end - c.t) / this.per) : 0 }; this.renderLoop(); }
+      if (this._playing) {
+        // Quantized jump: land at the same offset to the beat as now, so the deck stays in phase.
+        const at = this.when(), p = this.posAt(at);
+        this.seek(c.t + (p - this.quantize(p)), at);
+      } else {
+        // Paused: only move the playhead there (and make it the CUE point), e.g. to start both decks with Play A+B.
+        this.cuePoint = c.t; this.seek(c.t);
+      }
+    } else if (this.loop) {
+      // Inside a loop: the empty pad stores the loop itself as a loop cue.
+      cues[i] = { t: Math.round(this.loop.a * 1000) / 1000, name: '', end: Math.round(this.loop.b * 1000) / 1000 };
+      this.saveTrack({ cues });
+      toast(`Loop saved on hot cue ${CUE_LETTERS[i]}`);
     } else {
       const t = e.altKey ? this.time : this.quantize(this.time);
       cues[i] = { t: Math.round(t * 1000) / 1000, name: '' };
@@ -554,7 +564,7 @@ class Deck {
       b.addEventListener('contextmenu', (e) => { e.preventDefault(); this.padClick(i, e); });
       b.addEventListener('dblclick', () => this.padRename(i));
       b.setAttribute('aria-label', `Hot cue ${CUE_LETTERS[i]}`);
-      b.title = 'Empty: set cue · Set: play · Shift/right-click: delete · Double-click: rename';
+      b.title = 'Empty: set cue (in a loop: save the loop) · Set: jump · Shift/right-click: delete · Double-click: rename';
       box.appendChild(b);
     }
   }
@@ -715,7 +725,8 @@ class Deck {
     $$('.pad', this.root).forEach((p, i) => {
       const c = cues[i];
       p.classList.toggle('set', !!c);
-      $('.nm', p).textContent = c ? (c.name || fmtTime(c.t)) : '';
+      const beats = c && c.end && this.per ? Math.round((c.end - c.t) / this.per) : 0;
+      $('.nm', p).textContent = c ? (c.end ? '⟳ ' : '') + (c.name || (c.end ? `Loop ${beats}` : fmtTime(c.t))) : '';
     });
   }
   renderLoop() {
@@ -822,6 +833,7 @@ class Deck {
       const x = (c.t - t0) / spp;
       if (x < -20 * dpr || x > W) return;
       g.fillStyle = PAD_COLORS[i]; g.fillRect(x, 0, 1.5 * dpr, H);
+      if (c.end) { g.fillRect(x, 14 * dpr, (c.end - c.t) / spp, 3 * dpr); g.fillRect(x + (c.end - c.t) / spp - 1.5 * dpr, 0, 1.5 * dpr, H); }
       g.fillRect(x, 0, 14 * dpr, 14 * dpr);
       g.fillStyle = '#0d1015'; g.fillText(CUE_LETTERS[i], x + 3.5 * dpr, 11 * dpr);
     });
