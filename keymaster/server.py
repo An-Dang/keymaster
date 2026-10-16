@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import analysis, audio, keys, suggest
@@ -37,6 +37,10 @@ DEFAULT_SETTINGS = {
     "quantize": True,  # snap cues/loops to the beat and keep beat phase on hot cue jumps
     "folders": [],  # folders added to the library (shown in the sidebar)
 }
+
+
+GRID_SINCE = 1792135378  # grid detection switched to Beat This! beats/downbeats; older analyses get redone
+AUTO_CUE_NAMES = {"Start", "Drop", "Break"}  # names phrase_cues() gives; other names mean the user edited the cues
 
 
 # ---------- jobs ----------
@@ -160,13 +164,18 @@ def create_app() -> FastAPI:
                    "bpm_detected": r.bpm, "first_beat_detected": r.first_beat, "key_detected": r.key.camelot,
                    "lufs": loud["lufs"], "peak_db": loud["peak_db"], "clipped": loud["clipped"],
                    "status": "ready", "error": None, "analyzed_at": time.time()}
-            if not t.get("bpm"):
+            # The grid follows the analysis unless it was edited by hand or came from Rekordbox
+            # (then bpm/first_beat differ from the last detected values).
+            grid_auto = not t.get("bpm") or (t.get("bpm") == t.get("bpm_detected")
+                                             and t.get("first_beat") == t.get("first_beat_detected"))
+            if grid_auto:
                 upd["bpm"], upd["first_beat"] = r.bpm, r.first_beat
             elif t.get("first_beat") is None:
                 upd["first_beat"] = r.first_beat
             if not t.get("key"):
                 upd["key"] = r.key.camelot
-            if not any(t["cues"]):
+            auto_named = all(c is None or c.get("name") in AUTO_CUE_NAMES for c in t["cues"])
+            if not any(t["cues"]) or (grid_auto and auto_named):
                 cues = [None] * 8
                 for c in r.cues:
                     cues[c.slot] = {"t": round(c.t, 3), "name": c.name}
@@ -181,6 +190,25 @@ def create_app() -> FastAPI:
         return jobs.submit("analysis", "analyze", f"Analysis: {name}", analyze_job(tid), key=f"an:{tid}",
                            priority=priority, track_id=tid)
 
+    def regrid_old(priority: int = 6):
+        """Re-analyses tracks analysed before the current grid detection; repeats until all are done."""
+        for t in lib.tracks():
+            if t["status"] == "ready" and (t.get("analyzed_at") or 0) < GRID_SINCE and os.path.exists(t["path"]):
+                enqueue_analysis(t["id"], priority)
+
+    def retry_reappeared(priority: int = 5):
+        """Tracks marked missing (e.g. USB stick or drive unplugged) are analysed again once their file is back."""
+        for t in lib.tracks():
+            if t["status"] == "missing" and os.path.exists(t["path"]):
+                enqueue_analysis(t["id"], priority)
+
+    def watch():
+        enqueue_missing()
+        while True:
+            regrid_old()
+            retry_reappeared()
+            time.sleep(20)
+
     def enqueue_missing(priority: int = 5):
         for t in lib.tracks():
             if t["status"] in ("new", "analyzing") or not (CACHE_DIR / str(t["id"]) / "wave.bin").exists():
@@ -188,7 +216,7 @@ def create_app() -> FastAPI:
                     enqueue_analysis(t["id"], priority)
 
     if settings.get("auto_analyze"):
-        threading.Thread(target=enqueue_missing, daemon=True).start()
+        threading.Thread(target=watch, daemon=True).start()
 
     # ----- audio variants (stems, key shift) -----
 
@@ -280,15 +308,27 @@ def create_app() -> FastAPI:
         return Response(f.read_bytes(), media_type="application/octet-stream",
                         headers={"X-Wave-Rate": str(analysis.WAVE_RATE), "Cache-Control": "no-cache"})
 
-    @app.get("/api/audio/{tid}")
-    def audio_file(tid: int, stem: str = "mix", shift: int = 0, processed: int = 0):
-        t = track_or_404(tid)
-        if processed and t.get("processed_path") and os.path.exists(t["processed_path"]):
-            return FileResponse(t["processed_path"])
-        p = variant_path(tid, stem, shift)
+    @app.get("/api/pcm/{tid}")
+    def pcm(tid: int, stem: str = "mix"):
+        """Decoded audio as 16-bit WAV for the decks.
+
+        Decoding here (same decoder as the analysis) keeps beat grid and playback on one time base and
+        plays formats the browser cannot decode (AIFF, ALAC).
+        """
+        import io
+
+        import soundfile as sf
+
+        track_or_404(tid)
+        if stem not in ("mix", "vocals", "instrumental"):
+            raise HTTPException(400, "Invalid stem")
+        p = variant_path(tid, stem, 0)
         if not p.exists():
-            raise HTTPException(409, "Variant not rendered yet")
-        return FileResponse(p)
+            raise HTTPException(409 if stem != "mix" else 404, "Stem not rendered yet" if stem != "mix" else "File not found")
+        x, sr = audio.load_stereo(p)
+        buf = io.BytesIO()
+        sf.write(buf, np.clip(x, -1, 1), sr, format="WAV", subtype="PCM_16")
+        return Response(buf.getvalue(), media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/tracks/{tid}/render")
     def render(tid: int, body: dict = Body(...)):

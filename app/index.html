@@ -56,6 +56,9 @@
 </header>
 
 <main>
+  <!-- zoomed waveforms of A and B, stacked full width so their beats can be compared (filled by app.js) -->
+  <section class="wave-stack panel" id="waveStack" aria-label="Waveforms"></section>
+
   <section class="decks" id="decks">
     <!-- deck template is cloned by app.js into #deckA and #deckB -->
     <div class="deck panel" id="deckA" data-deck="A"></div>
@@ -77,7 +80,10 @@
         <div class="xf-labels"><span>A</span><button class="mini-btn" id="xfCenter" type="button">Center</button><span>B</span></div>
       </div>
       <div class="xfade">
-        <button class="tog q-tog" id="quantBtn" type="button" aria-pressed="true" title="Snap cues and loops to the beat; hot cue jumps keep the beat phase">QUANTIZE</button>
+        <button class="tog q-tog" id="quantBtn" type="button" aria-pressed="true" title="Snap cues and loops to the beat; hot cue jumps keep the beat phase; Play starts on the other deck's next beat">QUANTIZE</button>
+      </div>
+      <div class="xfade">
+        <button class="tog both-tog" id="playBoth" type="button" title="Start both decks at the same moment from where they are parked (hot cue / CUE). If one deck is already playing, the other starts on its next beat.">▶ A+B</button>
       </div>
     </div>
     <div class="deck panel" id="deckB" data-deck="B"></div>
@@ -339,6 +345,7 @@
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="/app/vendor/SignalsmithStretch.js"></script>
 <script src="/app/app.js"></script>
 </body>
 </html>

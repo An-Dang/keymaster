@@ -280,7 +280,7 @@ def separate(x: np.ndarray, sr: int, progress=None) -> dict[str, np.ndarray]:
     import torch
     from demucs.api import Separator
 
-    if _separator is None:
+    if _separator is None:  # created outside the lock: loading weights does no GPU work yet
         device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
         _separator = Separator(model="htdemucs", device=device, segment=7)
 
@@ -288,9 +288,12 @@ def separate(x: np.ndarray, sr: int, progress=None) -> dict[str, np.ndarray]:
         if progress and info.get("state") == "end" and info.get("audio_length"):
             progress(min(0.99, info["segment_offset"] / info["audio_length"]))
 
+    from .analysis import GPU_LOCK
+
     _separator.update_parameter(callback=cb)
     wav = torch.from_numpy(np.ascontiguousarray(x.T))
-    _, parts = _separator.separate_tensor(wav, sr)
+    with GPU_LOCK:
+        _, parts = _separator.separate_tensor(wav, sr)
     out_sr = _separator.samplerate
     vocals = parts["vocals"].cpu().numpy().T
     inst = sum(v for k, v in parts.items() if k != "vocals").cpu().numpy().T

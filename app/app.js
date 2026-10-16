@@ -101,16 +101,28 @@ const targetLufs = () => (S.presets[S.settings.preset] || { lufs: -9 }).lufs;
 const trackGain = (t) => (t && t.lufs != null ? clamp(targetLufs() - t.lufs, -24, 12) : null);
 
 /* ---------- audio graph ---------- */
-const AU = { ctx: null, limiter: null, xf: 0 };
-function ensureCtx() {
-  if (AU.ctx) { if (AU.ctx.state === 'suspended') AU.ctx.resume(); return AU.ctx; }
-  const ctx = AU.ctx = new (window.AudioContext || window.webkitAudioContext)();
+// One AudioContext clock for both decks. Every play, seek, loop and tempo change is scheduled at an exact
+// context time on a Signalsmith Stretch node, so jumps and SYNC are sample-accurate (no drift correction).
+const AU = { ctx: null, limiter: null, xf: 0, lead: 0.05, ready: null };
+function initAudio() {
+  if (AU.ready) return AU.ready;
+  const ctx = AU.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   const lim = AU.limiter = ctx.createDynamicsCompressor();
   lim.threshold.value = -1; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.12;
   lim.connect(ctx.destination);
-  Object.values(DECKS).forEach((d) => d.connect(ctx));
-  return ctx;
+  AU.ready = (async () => {
+    for (const d of Object.values(DECKS)) await d.connect(ctx);
+    // Scheduling this far ahead lets the stretcher compensate its own latency, so changes land exactly on time.
+    AU.lead = Math.max(0.03, (await DECKS.A.node.latency()) + 0.01);
+  })();
+  return AU.ready;
 }
+function ensureCtx() {
+  initAudio();
+  if (AU.ctx.state === 'suspended') AU.ctx.resume();
+  return AU.ctx;
+}
+const now = () => (AU.ctx ? AU.ctx.currentTime : 0);
 function xfGains() {
   const x = (AU.xf + 1) / 2;
   return { A: Math.cos(x * Math.PI / 2), B: Math.sin(x * Math.PI / 2) };
@@ -124,51 +136,105 @@ class Deck {
     this.root.appendChild($('#deckTpl').content.cloneNode(true));
     this.other = null;
     this.t = null;
-    this.audio = new Audio(); this.audio.preload = 'auto'; this.audio.preservesPitch = true;
+    // Transport model: position = anchorIn + (ctx time - anchorOut) * rate while playing, anchorIn while paused.
+    this.node = null; this.buffered = false; this.duration = 0; this.loadToken = 0; this.loadingMsg = null;
+    this.anchorIn = 0; this.anchorOut = 0; this._playing = false;
     this.stem = 'mix'; this.shift = 0; this.pending = null;
     this.pct = 0; this.range = 8; this.keylock = true; this.sync = false;
-    this.loop = null; this.cuePoint = 0; this.zoomSec = 8; this.grid = false; this.metro = false;
+    this.loop = null; this.cuePoint = 0; this.grid = false; this.metro = false;
     this.wave = null; this.waveRate = 150; this.ovCache = null; this.lastBeat = null; this.taps = [];
-    this.fader = 1; this.dirty = true; this.syncTick = 0;
-    this.q = (s) => $(s, this.root);
+    this.fader = 1; this.dirty = true;
+    // The zoomed waveform lives in the shared stack above the decks; q() finds elements in both places.
+    this.zw = $('.zoom-wrap', this.root);
+    this.zw.dataset.deck = id;
+    this.zw.insertAdjacentHTML('afterbegin', `<span class="wave-tag">${id}</span><span class="wave-title"></span>`);
+    $('#waveStack').appendChild(this.zw);
+    this.zw.addEventListener('pointerdown', () => { S.focus = id; });
+    this.q = (s) => $(s, this.root) || (this.zw.matches(s) ? this.zw : $(s, this.zw));
     $('.d-letter', this.root).textContent = id;
     $('.ld', this.root).textContent = id;
     this.buildPads();
     this.bind();
-    this.audio.addEventListener('ended', () => this.renderTransport());
-    this.audio.addEventListener('pause', () => this.renderTransport());
-    this.audio.addEventListener('play', () => this.renderTransport());
-    this.audio.addEventListener('loadedmetadata', () => { this.dirty = true; this.renderTransport(); });
     this.render();
   }
 
-  connect(ctx) {
-    this.srcNode = ctx.createMediaElementSource(this.audio);
+  async connect(ctx) {
+    this.node = await SignalsmithStretch(ctx);
     this.trim = ctx.createGain();
     this.gain = ctx.createGain();
     this.an = ctx.createAnalyser(); this.an.fftSize = 1024; this.buf = new Float32Array(1024);
-    this.srcNode.connect(this.trim).connect(this.gain).connect(this.an).connect(AU.limiter);
+    this.node.connect(this.trim).connect(this.gain).connect(this.an).connect(AU.limiter);
     this.applyGain();
   }
 
   get rate() { return 1 + this.pct / 100; }
+  // Both waveforms share one zoom in *played* seconds, so decks at the same played BPM show the same beat spacing.
+  get zoomSec() { return S.zoomSec; }
+  get spanSec() { return S.zoomSec * this.rate; } // source seconds visible in the zoom view
   get bpm() { return this.t && this.t.bpm ? this.t.bpm * this.rate : null; }
   get per() { return this.t && this.t.bpm ? 60 / this.t.bpm : null; }
   get fb() { return (this.t && this.t.first_beat) || 0; }
-  get time() { return this.audio.currentTime || 0; }
-  get dur() { return (isFinite(this.audio.duration) && this.audio.duration) || (this.t && this.t.duration) || 0; }
-  get playing() { return !this.audio.paused && !this.audio.ended; }
+  get time() { return this.posAt(now()); }
+  get dur() { return this.duration || (this.t && this.t.duration) || 0; }
+  get playing() { return this._playing; }
   get key() { return this.t && this.t.key ? shiftKey(this.t.key, this.shift) : null; }
+
+  /* ----- transport (all changes scheduled on the shared audio clock) ----- */
+  when() { return now() + AU.lead; }
+  posAt(at) {
+    if (!this._playing || at <= this.anchorOut) return this.anchorIn;
+    let p = this.anchorIn + (at - this.anchorOut) * this.rate;
+    if (this.loop && p >= this.loop.b && this.anchorIn < this.loop.b) p = this.loop.a + ((p - this.loop.a) % (this.loop.b - this.loop.a));
+    return p;
+  }
+  semitones() { return this.shift + (this.keylock ? 0 : 12 * Math.log2(this.rate)); }
+  // Sends the full state for context time `at`. The stretcher keeps only one pending change (a new schedule
+  // replaces it) and maps input = anchorIn + (t - at) * rate from then on, compensating its own latency.
+  push(at) {
+    if (!this.node) return;
+    clearTimeout(this.startTimer);
+    this.node.schedule(this.state(at));
+  }
+  state(at) {
+    return {
+      outputTime: at, active: this._playing, input: this.anchorIn, rate: this.rate, semitones: this.semitones(),
+      loopStart: this.loop ? this.loop.a : 0, loopEnd: this.loop ? this.loop.b : 0,
+    };
+  }
+  // Re-anchors at `at` (after a tempo/key/loop change) without moving the playhead.
+  commit(at = this.when()) {
+    if (this._playing) { this.anchorIn = this.posAt(at); this.anchorOut = at; }
+    this.push(at);
+  }
+  play(at = this.when()) {
+    if (!this.buffered || this._playing) return;
+    ensureCtx();
+    this.anchorOut = at; this._playing = true;
+    // A start further ahead than the lead (quantized start on the other deck's next beat) is sent just in time,
+    // because an early schedule would start the stretcher right away (one pending change only).
+    const wait = at - this.when();
+    if (wait > 0.005) { clearTimeout(this.startTimer); this.startTimer = setTimeout(() => this.node.schedule(this.state(at)), wait * 1000); }
+    else this.push(at);
+    this.renderTransport();
+  }
+  pause(at = this.when()) {
+    if (!this._playing) return;
+    this.anchorIn = this.posAt(at); this.anchorOut = at; this._playing = false;
+    this.push(at); this.renderTransport();
+  }
+  seek(t, at = this.when()) {
+    this.anchorIn = clamp(t, 0, Math.max(0, this.dur - 0.05)); this.anchorOut = at;
+    this.push(at); this.dirty = true;
+  }
 
   /* ----- loading ----- */
   async load(t, opts = {}) {
     if (!t) return;
-    this.audio.pause();
+    this.pause(now());
     this.t = t; this.stem = 'mix'; this.shift = 0; this.pending = null; this.loop = null;
     this.cuePoint = (t.cues && t.cues[0] && t.cues[0].t) || 0;
     this.pct = 0; this.sync = false; this.wave = null; this.ovCache = null;
-    this.audio.src = `/api/audio/${t.id}?stem=mix&shift=0`;
-    this.audio.currentTime = 0;
+    this.anchorIn = 0; this.duration = t.duration || 0;
     S.focus = this.id;
     api(`/api/tracks/${t.id}/priority`, { body: {} }).catch(() => {});
     this.loadWave();
@@ -176,8 +242,34 @@ class Deck {
     this.applyGain();
     renderLibraryMarks();
     refreshSuggestions();
-    if (opts.shift || (opts.stem && opts.stem !== 'mix')) await this.setVariant(opts.stem || 'mix', opts.shift || 0);
+    if (!(await this.loadAudio('mix'))) return;
+    if (opts.shift) this.setShift(opts.shift);
+    if (opts.stem && opts.stem !== 'mix') await this.setStem(opts.stem);
     if (opts.sync) this.setSync(true);
+  }
+
+  // Fetches the server-decoded audio (same decoder as the analysis, so grid and sound share one time base).
+  async loadAudio(stem) {
+    const t = this.t, token = ++this.loadToken;
+    this.buffered = false; this.loadingMsg = 'Loading audio …'; this.render();
+    try {
+      await initAudio();
+      const r = await fetch(`/api/pcm/${t.id}?stem=${stem}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+      const buf = await AU.ctx.decodeAudioData(await r.arrayBuffer());
+      if (token !== this.loadToken) return false;
+      const chans = [buf.getChannelData(0), buf.getChannelData(buf.numberOfChannels > 1 ? 1 : 0)];
+      await this.node.dropBuffers();
+      await this.node.addBuffers(chans);
+      if (token !== this.loadToken) return false;
+      this.duration = buf.duration; this.buffered = true; this.loadingMsg = null;
+      this.push(this.when());
+      this.render();
+      return true;
+    } catch (e) {
+      if (token === this.loadToken) { this.loadingMsg = 'Audio could not be loaded'; this.render(); toast('Loading audio failed: ' + esc(e.message), { error: true }); }
+      return false;
+    }
   }
 
   async loadWave() {
@@ -200,52 +292,68 @@ class Deck {
     this.applyGain(); this.render();
   }
 
-  async setVariant(stem, shift) {
+  // Key shift is live on the stretcher; no rendering needed.
+  setShift(n) {
     if (!this.t) return;
-    shift = clamp(shift, -6, 6);
+    this.shift = clamp(n, -6, 6);
+    this.commit();
+    this.renderKey(); this.renderVariant(); refreshSuggestions();
+  }
+
+  async setStem(stem) {
+    if (!this.t || (stem === this.stem && !this.pending)) return;
     if (stem !== 'mix' && !S.stems) { toast('Stem separation is not installed.', { error: true }); return; }
-    this.pending = { stem, shift };
-    this.renderVariant();
-    let r;
-    try { r = await api(`/api/tracks/${this.t.id}/render`, { body: { stem, shift } }); }
-    catch (e) { this.pending = null; this.renderVariant(); toast(e.message, { error: true }); return; }
-    if (r.ready) this.swapSource(stem, shift);
-    // otherwise the poller retries until the render job is done
+    if (stem !== 'mix') {
+      this.pending = { stem }; this.renderVariant();
+      let r;
+      try { r = await api(`/api/tracks/${this.t.id}/render`, { body: { stem, shift: 0 } }); }
+      catch (e) { this.pending = null; this.renderVariant(); toast(e.message, { error: true }); return; }
+      if (!r.ready) return; // pollPending() finishes the swap when the separation job is done
+    }
+    await this.swapStem(stem);
   }
 
   async pollPending() {
     if (!this.pending || !this.t) return;
-    const { stem, shift } = this.pending;
+    const { stem } = this.pending;
     try {
-      const r = await api(`/api/tracks/${this.t.id}/render`, { body: { stem, shift } });
-      if (r.ready && this.pending && this.pending.stem === stem && this.pending.shift === shift) this.swapSource(stem, shift);
+      const r = await api(`/api/tracks/${this.t.id}/render`, { body: { stem, shift: 0 } });
+      if (r.ready && this.pending && this.pending.stem === stem) await this.swapStem(stem);
     } catch (e) { this.pending = null; this.renderVariant(); toast(e.message, { error: true }); }
   }
 
-  swapSource(stem, shift) {
-    const t = this.time, wasPlaying = this.playing;
-    this.stem = stem; this.shift = shift; this.pending = null;
-    this.audio.src = `/api/audio/${this.t.id}?stem=${stem}&shift=${shift}`;
-    this.audio.playbackRate = this.rate; this.audio.preservesPitch = this.keylock;
-    const resume = () => {
-      this.audio.currentTime = t;
-      this.audio.playbackRate = this.rate;
-      if (wasPlaying) this.audio.play().catch(() => {});
-      this.audio.removeEventListener('loadedmetadata', resume);
-    };
-    this.audio.addEventListener('loadedmetadata', resume);
-    this.render();
-    refreshSuggestions();
+  async swapStem(stem) {
+    this.pending = null;
+    const pos = this.time, was = this._playing;
+    this.pause(now());
+    this.stem = stem;
+    if (!(await this.loadAudio(stem))) return;
+    this.seek(pos);
+    if (was) this.play();
+    this.renderVariant(); refreshSuggestions();
   }
 
-  /* ----- transport ----- */
   toggle() {
     if (!this.t) return;
+    if (!this.buffered) { toast('Audio is still loading …'); return; }
     ensureCtx();
-    if (this.playing) this.audio.pause(); else this.audio.play().catch((e) => toast('Cannot play: ' + e.message, { error: true }));
     S.focus = this.id;
+    if (this._playing) { this.pause(); return; }
+    const o = this.other;
+    if (this.sync && o && o._playing && o.per && this.per) {
+      // SYNC: start bar-aligned with the playing deck.
+      const at = this.when();
+      this.anchorIn -= this.phaseErrorAt(at, true) * this.per;
+      this.play(at);
+    } else this.play(this.quantizedStart());
   }
-  seek(t) { this.audio.currentTime = clamp(t, 0, Math.max(0, this.dur - 0.05)); this.dirty = true; }
+  // QUANTIZE: when the other deck is playing, start on its next beat, so a deck parked on a beat lands in phase.
+  quantizedStart() {
+    const o = this.other, at = this.when();
+    if (!S.settings.quantize || !o || !o._playing || !o.per) return at;
+    const p = o.posAt(at), k = Math.ceil((p - o.fb) / o.per - 1e-6);
+    return at + (o.fb + k * o.per - p) / o.rate;
+  }
   quantize(t) {
     if (!this.per || !S.settings.quantize) return t;
     const k = Math.round((t - this.fb) / this.per);
@@ -253,16 +361,18 @@ class Deck {
   }
   cue() {
     if (!this.t) return;
-    if (this.playing) { this.audio.pause(); this.seek(this.cuePoint); }
+    if (this._playing) { this.pause(); this.seek(this.cuePoint); }
     else { this.cuePoint = this.quantize(this.time); this.seek(this.cuePoint); toast(`Cue set at ${fmtTime(this.cuePoint)}`); }
   }
   setTempo(pct) {
+    const at = this.when();
+    if (this._playing) { this.anchorIn = this.posAt(at); this.anchorOut = at; }
     this.pct = clamp(pct, -this.range, this.range);
-    this.audio.playbackRate = this.rate;
+    this.push(at);
     this.renderTempo();
-    if (this.other && this.other.sync && this.other.t) this.other.followTempo();
+    if (this.other && this.other.sync && this.other.t) this.other.followTempo(at);
   }
-  followTempo() {
+  followTempo(at = this.when()) {
     if (!this.other || !this.other.bpm || !this.t || !this.t.bpm) return;
     let best = null;
     for (const r of [1, 2, 0.5]) {
@@ -270,62 +380,55 @@ class Deck {
       if (best === null || Math.abs(pct) < Math.abs(best)) best = pct;
     }
     if (Math.abs(best) > this.range) this.range = Math.abs(best) <= 16 ? 16 : 50;
-    this.pct = best; this.audio.playbackRate = this.rate;
+    if (this._playing) { this.anchorIn = this.posAt(at); this.anchorOut = at; }
+    this.pct = best;
+    this.push(at);
     this.renderTempo();
   }
   setSync(on) {
     this.sync = on;
     if (on) {
       if (!this.other || !this.other.t || !this.other.bpm || !this.t || !this.t.bpm) { this.sync = false; toast('SYNC needs a track with BPM on both decks.'); }
-      else { this.followTempo(); this.alignPhase(true); }
+      else { const at = this.when(); this.followTempo(at); if (this._playing && this.other._playing) this.alignPhase(true, at); }
     }
     this.renderTransport();
   }
-  // Phase difference to the other deck in beats (bar-aware when `bar` is true), range -0.5..0.5 of the unit.
-  phaseError(bar) {
-    const o = this.other;
-    const unit = bar ? 4 : 1;
-    const po = (((o.time - o.fb) / o.per) % unit + unit) % unit;
-    const pm = (((this.time - this.fb) / this.per) % unit + unit) % unit;
+  // Phase difference to the other deck at context time `at`, in beats (bar-aware when `bar`), range -unit/2..unit/2.
+  phaseErrorAt(at, bar) {
+    const o = this.other, unit = bar ? 4 : 1;
+    const po = (((o.posAt(at) - o.fb) / o.per) % unit + unit) % unit;
+    const pm = (((this.posAt(at) - this.fb) / this.per) % unit + unit) % unit;
     let d = pm - po;
     if (d > unit / 2) d -= unit; if (d < -unit / 2) d += unit;
     return d;
   }
-  alignPhase(bar) {
+  alignPhase(bar, at = this.when()) {
     const o = this.other;
     if (!o || !o.t || !o.per || !this.per) return;
-    const d = this.phaseError(bar);
-    this.seek(this.time - d * this.per);
-  }
-  syncCorrect() {
-    // Keeps both decks locked while playing: small tempo bends instead of audible jumps.
-    const o = this.other;
-    if (!this.sync || !this.playing || !o || !o.playing || !o.per || !this.per) { this.audio.playbackRate = this.rate; return; }
-    const errSec = this.phaseError(false) * this.per;
-    if (Math.abs(errSec) > 0.12) { this.seek(this.time - errSec); return; }
-    const bend = clamp(-errSec * 0.6, -0.03, 0.03);
-    this.audio.playbackRate = this.rate * (1 + bend);
+    this.seek(this.posAt(at) - this.phaseErrorAt(at, bar) * this.per, at);
   }
   setLoop(beats) {
     if (!this.per) { toast('Loops need a track with a beatgrid.'); return; }
-    if (this.loop && this.loop.beats === beats) { this.loop = null; this.renderLoop(); return; }
-    const start = this.loop ? this.loop.a : (S.settings.quantize ? this.fb + Math.floor((this.time - this.fb) / this.per + 0.02) * this.per : this.time);
+    if (this.loop && this.loop.beats === beats) { this.loopOff(); return; }
+    const at = this.when(), p = this.posAt(at);
+    const start = this.loop ? this.loop.a : (S.settings.quantize ? this.fb + Math.floor((p - this.fb) / this.per + 0.02) * this.per : p);
     this.loop = { a: Math.max(0, start), b: Math.max(0, start) + beats * this.per, beats };
-    if (this.time > this.loop.b || this.time < this.loop.a) this.seek(this.loop.a);
+    if (p < this.loop.a || p > this.loop.b) this.seek(this.loop.a, at);
+    else { this.anchorIn = p; this.anchorOut = at; this.push(at); }
     this.renderLoop();
   }
-
-  // Seconds from the nearest beat (negative = just before it); 0 when quantize is off.
-  beatOffset() {
-    if (!this.per || !S.settings.quantize) return 0;
-    return this.time - this.quantize(this.time);
+  loopOff() {
+    const at = this.when();
+    if (this._playing) { this.anchorIn = this.posAt(at); this.anchorOut = at; }
+    this.loop = null; this.push(at); this.renderLoop();
   }
+
   jump(beats) {
     if (!this.per) { toast('Beat jump needs a track with a beatgrid.'); return; }
-    const d = beats * this.per;
-    if (this.time + d < 0 || this.time + d > this.dur) return; // clamping would break the beat phase
+    const at = this.when(), p = this.posAt(at), d = beats * this.per;
+    if (p + d < 0 || p + d > this.dur) return; // clamping would break the beat phase
     if (this.loop) { this.loop.a += d; this.loop.b += d; this.renderLoop(); }
-    this.seek(this.time + d);
+    this.seek(p + d, at);
   }
 
   // Paused navigation like the original browser tool: land exactly on the next/previous grid line.
@@ -343,10 +446,13 @@ class Deck {
     const cues = this.t.cues || (this.t.cues = Array(8).fill(null));
     if (cues[i] && (e.shiftKey || e.type === 'contextmenu')) {
       cues[i] = null; this.saveTrack({ cues }); toast(`Hot cue ${CUE_LETTERS[i]} deleted`);
+    } else if (cues[i] && this._playing) {
+      // Quantized jump: land at the same offset to the beat as now, so the deck stays in phase.
+      const at = this.when(), p = this.posAt(at);
+      this.seek(cues[i].t + (p - this.quantize(p)), at);
     } else if (cues[i]) {
-      // Quantized jump while playing: land at the same offset to the beat as now, so the deck stays in phase.
-      this.seek(cues[i].t + (this.playing ? this.beatOffset() : 0));
-      if (!this.playing) { ensureCtx(); this.audio.play().catch(() => {}); }
+      // Paused: only move the playhead there (and make it the CUE point), e.g. to start both decks with Play A+B.
+      this.cuePoint = cues[i].t; this.seek(cues[i].t);
     } else {
       const t = e.altKey ? this.time : this.quantize(this.time);
       cues[i] = { t: Math.round(t * 1000) / 1000, name: '' };
@@ -458,22 +564,22 @@ class Deck {
     this.root.addEventListener('pointerdown', () => { S.focus = this.id; });
     q('.play').addEventListener('click', () => this.toggle());
     q('.cue-btn').addEventListener('click', () => this.cue());
-    q('.k-down').addEventListener('click', () => this.setVariant(this.pending ? this.pending.stem : this.stem, (this.pending ? this.pending.shift : this.shift) - 1));
-    q('.k-up').addEventListener('click', () => this.setVariant(this.pending ? this.pending.stem : this.stem, (this.pending ? this.pending.shift : this.shift) + 1));
+    q('.k-down').addEventListener('click', () => this.setShift(this.shift - 1));
+    q('.k-up').addEventListener('click', () => this.setShift(this.shift + 1));
     q('.tempo').addEventListener('input', (e) => { this.sync = false; this.setTempo(parseFloat(e.target.value)); this.renderTransport(); });
     q('.tempo').addEventListener('dblclick', () => this.setTempo(0));
     q('.tempo-reset').addEventListener('click', () => { this.sync = false; this.setTempo(0); this.renderTransport(); });
     q('.tempo-range').addEventListener('change', (e) => { this.range = parseInt(e.target.value, 10); this.setTempo(this.pct); });
     q('.sync').addEventListener('click', () => this.setSync(!this.sync));
-    q('.keylock').addEventListener('click', () => { this.keylock = !this.keylock; this.audio.preservesPitch = this.keylock; this.renderTransport(); });
+    q('.keylock').addEventListener('click', () => { this.keylock = !this.keylock; this.commit(); this.renderTransport(); });
     q('.grid-tog').addEventListener('click', () => this.toggleGrid());
     $$('.loops button', this.root).forEach((b) => b.addEventListener('click', () => this.setLoop(parseInt(b.dataset.beats, 10))));
-    q('.loop-off').addEventListener('click', () => { this.loop = null; this.renderLoop(); });
+    q('.loop-off').addEventListener('click', () => this.loopOff());
     $$('.jumps button', this.root).forEach((b) => b.addEventListener('click', () => this.jump(parseInt(b.dataset.jump, 10))));
-    $$('.stems button', this.root).forEach((b) => b.addEventListener('click', () => this.setVariant(b.dataset.stem, this.pending ? this.pending.shift : this.shift)));
+    $$('.stems button', this.root).forEach((b) => b.addEventListener('click', () => this.setStem(b.dataset.stem)));
     q('.stem-exp').addEventListener('click', () => this.exportStem());
-    q('.z-in').addEventListener('click', () => { this.zoomSec = clamp(this.zoomSec / 1.5, 1, 64); this.dirty = true; });
-    q('.z-out').addEventListener('click', () => { this.zoomSec = clamp(this.zoomSec * 1.5, 1, 64); this.dirty = true; });
+    q('.z-in').addEventListener('click', () => setZoom(S.zoomSec / 1.5));
+    q('.z-out').addEventListener('click', () => setZoom(S.zoomSec * 1.5));
     // grid bar
     q('.g-left').addEventListener('click', (e) => this.gridShift(e.shiftKey ? -0.001 : -0.005));
     q('.g-right').addEventListener('click', (e) => this.gridShift(e.shiftKey ? 0.001 : 0.005));
@@ -498,11 +604,11 @@ class Deck {
       if (!this.t || e.target.closest('.zoom-ctl')) return;
       zw.setPointerCapture(e.pointerId);
       drag = { x: e.clientX, t: this.time, fb: this.fb, playing: this.playing, moved: false };
-      if (!this.grid && drag.playing) this.audio.pause();
+      if (!this.grid && drag.playing) this.pause(now());
     });
     zw.addEventListener('pointermove', (e) => {
       if (!drag) return;
-      const spp = this.zoomSec / zw.clientWidth, dx = e.clientX - drag.x;
+      const spp = this.spanSec / zw.clientWidth, dx = e.clientX - drag.x;
       if (Math.abs(dx) > 2) drag.moved = true;
       if (this.grid) this.setGrid(this.t.bpm, drag.fb + dx * spp, false);
       else this.seek(drag.t - dx * spp);
@@ -510,15 +616,15 @@ class Deck {
     const end = () => {
       if (!drag) return;
       if (this.grid && drag.moved) this.saveGridSoon();
-      if (!this.grid && drag.playing) this.audio.play().catch(() => {});
+      if (!this.grid && drag.playing) this.play();
       drag = null;
     };
     zw.addEventListener('pointerup', end); zw.addEventListener('pointercancel', end);
     zw.addEventListener('wheel', (e) => {
       if (!this.t) return;
       e.preventDefault();
-      if (e.ctrlKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) this.zoomSec = clamp(this.zoomSec * (e.deltaY > 0 ? 1.15 : 1 / 1.15), 1, 64);
-      else this.seek(this.time + e.deltaX * this.zoomSec / zw.clientWidth);
+      if (e.ctrlKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) setZoom(S.zoomSec * (e.deltaY > 0 ? 1.15 : 1 / 1.15));
+      else this.seek(this.time + e.deltaX * this.spanSec / zw.clientWidth);
       this.dirty = true;
     }, { passive: false });
     q('.ov-wrap').addEventListener('pointerdown', (e) => {
@@ -549,8 +655,12 @@ class Deck {
 
   async exportStem() {
     if (!this.t) return;
+    const body = { stem: this.stem, shift: this.shift };
     try {
-      const r = await api('/api/stems/export', { body: { track_id: this.t.id, stem: this.stem, shift: this.shift } });
+      // The export file is rendered on the server (stem + key shift); wait for that job first.
+      toast('Preparing export …', { ms: 60000 });
+      while (!(await api(`/api/tracks/${this.t.id}/render`, { body })).ready) await new Promise((r) => setTimeout(r, 1000));
+      const r = await api('/api/stems/export', { body: { track_id: this.t.id, ...body } });
       toast(`Exported: ${esc(r.path.split('/').pop())} <button class="mini-btn" onclick="revealPath('${esc(r.path).replace(/'/g, "\\'")}')">Show in Finder</button>`, { ms: 6000 });
     } catch (e) { toast(e.message, { error: true }); }
   }
@@ -558,11 +668,13 @@ class Deck {
   render() {
     const t = this.t, q = this.q;
     q('.track-name').textContent = t ? (t.title || '–') : 'Empty';
+    q('.wave-title').textContent = t ? [t.title, t.artist].filter(Boolean).join(' · ') : '';
     q('.track-meta').innerHTML = t ? esc([t.artist, t.genre].filter(Boolean).join(' · ') || t.path.split('/').pop())
       : `Drag a track here from the library or click <b>${this.id}</b>`;
     const ready = !!(t && t.status === 'ready');
-    q('.wave-msg').textContent = !t ? 'No track loaded' : (this.wave ? '' : (t.status === 'missing' ? 'File not found' : (t.status === 'error' ? 'Analysis failed' : 'Analyzing …')));
-    q('.wave-msg').hidden = !!this.wave;
+    const msg = !t ? 'No track loaded' : this.loadingMsg || (this.wave ? '' : (t.status === 'missing' ? 'File not found' : (t.status === 'error' ? 'Analysis failed' : 'Analyzing …')));
+    q('.wave-msg').textContent = msg;
+    q('.wave-msg').hidden = !msg;
     ['.play', '.cue-btn'].forEach((s) => { q(s).disabled = !t; });
     $$('.pad', this.root).forEach((p) => { p.disabled = !t; });
     q('.k-down').disabled = q('.k-up').disabled = !(t && t.key);
@@ -574,14 +686,15 @@ class Deck {
   }
   renderKey() {
     const t = this.t, chip = this.q('.key-chip');
-    const shown = this.pending ? (t && t.key ? shiftKey(t.key, this.pending.shift) : null) : this.key;
+    const shown = this.key;
     chip.textContent = shown || '–';
     chip.style.setProperty('--kc', keyColor(shown));
-    const sh = this.pending ? this.pending.shift : this.shift;
+    const sh = this.shift;
     this.q('.k-sub').textContent = t && t.key ? (sh ? `${sh > 0 ? '+' : ''}${sh} st · orig. ${t.key}` : (CLASSIC[t.key] || '')) : '\u00a0';
   }
   renderTempo() {
     const q = this.q;
+    this.dirty = true; // the zoom view's scale follows the tempo
     const tempo = q('.tempo');
     tempo.min = -this.range; tempo.max = this.range; tempo.value = this.pct;
     q('.tempo-range').value = String(this.range);
@@ -592,6 +705,7 @@ class Deck {
   renderTransport() {
     const q = this.q;
     q('.play').classList.toggle('on', this.playing);
+    if (this.other) renderPlayBoth(); // DECKS exists once decks are linked
     q('.play').setAttribute('aria-label', this.playing ? 'Pause' : 'Play');
     q('.sync').setAttribute('aria-pressed', String(this.sync));
     q('.keylock').setAttribute('aria-pressed', String(this.keylock));
@@ -610,7 +724,7 @@ class Deck {
     this.dirty = true;
   }
   renderVariant() {
-    const target = this.pending || { stem: this.stem, shift: this.shift };
+    const target = this.pending || { stem: this.stem };
     $$('.stems button', this.root).forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset.stem === target.stem));
       b.classList.toggle('busy', !!this.pending && b.dataset.stem === this.pending.stem);
@@ -618,10 +732,10 @@ class Deck {
     this.q('.stem-exp').disabled = !this.t || !!this.pending || (this.stem === 'mix' && this.shift === 0);
     this.renderKey();
     const msg = this.q('.wave-msg');
-    if (this.pending && this.wave) {
+    if (this.pending) {
       msg.hidden = false;
-      msg.textContent = this.pending.stem !== 'mix' ? 'Separating stems … (about 1 minute the first time)' : 'Shifting key …';
-    } else if (this.wave) msg.hidden = true;
+      msg.textContent = 'Separating stems … (about 1 minute the first time)';
+    } else if (this.wave && !this.loadingMsg) msg.hidden = true;
   }
   renderLoud() {
     const t = this.t, q = this.q;
@@ -634,10 +748,8 @@ class Deck {
   /* ----- drawing ----- */
   frame() {
     const t = this.time;
-    if (this.loop && this.playing && t >= this.loop.b) this.seek(this.loop.a + (t - this.loop.b));
-    if (this.audio.ended && this.loop) { this.seek(this.loop.a); this.audio.play().catch(() => {}); }
+    if (this._playing && !this.loop && this.buffered && t >= this.dur) { this.pause(now()); this.anchorIn = this.dur; }
     this.metronomeTick();
-    if (++this.syncTick % 10 === 0) this.syncCorrect();
     this.q('.t-now').textContent = fmtTime(t);
     this.q('.t-rem').textContent = '−' + fmtTime(Math.max(0, this.dur - t));
     if (this.an) {
@@ -663,7 +775,7 @@ class Deck {
     const W = cv.width, H = cv.height, mid = H / 2, dpr = window.devicePixelRatio || 1;
     g.clearRect(0, 0, W, H);
     if (!this.t) return;
-    const now = this.time, spp = this.zoomSec / W, t0 = now - W / 2 * spp;
+    const now = this.time, spp = this.spanSec / W, t0 = now - W / 2 * spp;
     // loop region
     if (this.loop) {
       const xa = (this.loop.a - t0) / spp, xb = (this.loop.b - t0) / spp;
@@ -751,8 +863,32 @@ class Deck {
   }
 }
 
+S.zoomSec = (() => { try { return parseFloat(localStorage.getItem('km:zoom')) || 8; } catch (e) { return 8; } })();
+function setZoom(sec) {
+  S.zoomSec = clamp(sec, 1, 64);
+  try { localStorage.setItem('km:zoom', String(S.zoomSec)); } catch (e) { /* per-viewer convenience only */ }
+  Object.values(DECKS).forEach((d) => { d.dirty = true; });
+}
 const DECKS = { A: new Deck('A'), B: new Deck('B') };
 DECKS.A.other = DECKS.B; DECKS.B.other = DECKS.A;
+initAudio(); // context starts suspended; the first play/click resumes it
+
+// Play A+B: both decks start on the same audio-clock instant from where they are parked.
+function renderPlayBoth() {
+  const b = $('#playBoth'); if (!b) return;
+  const both = DECKS.A.playing && DECKS.B.playing;
+  b.textContent = both ? '■ A+B' : '▶ A+B';
+  b.classList.toggle('on', !!both);
+}
+$('#playBoth').addEventListener('click', () => {
+  const A = DECKS.A, B = DECKS.B;
+  if (!A.buffered || !B.buffered) { toast('Load a track into both decks first.'); return; }
+  ensureCtx();
+  if (A.playing && B.playing) { const at = now(); A.pause(at); B.pause(at); return; }
+  if (A.playing || B.playing) { (A.playing ? B : A).toggle(); return; } // the stopped deck joins on the next beat
+  const at = now() + 0.1;
+  A.play(at); B.play(at);
+});
 const focused = () => DECKS[S.focus] || DECKS.A;
 window.revealPath = (p) => api('/api/reveal', { body: { path: p } }).catch((e) => toast(e.message, { error: true }));
 

@@ -18,6 +18,7 @@ dependencies = [
 essentia = ["essentia"]
 app = ["fastapi", "uvicorn[standard]", "pyloudnorm", "mutagen", "platformdirs", "soxr"]
 stems = ["demucs"]
+beats = ["beat-this"]  # beat/downbeat model for accurate grids
 
 [project.scripts]
 keymaster = "keymaster.cli:main"

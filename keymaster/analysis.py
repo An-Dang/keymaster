@@ -4,6 +4,7 @@ Uses essentia (KeyExtractor with the EDM profile, RhythmExtractor2013) when it i
 otherwise librosa. Both paths return the same Analysis.
 """
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -117,15 +118,17 @@ def refine_bpm(env: np.ndarray, fps: float, rough_bpm: float) -> float:
     spec = np.fft.rfft(env, 2 * n)
     acf = np.fft.irfft(spec * np.conj(spec))[:n] / np.arange(n, 0, -1)
     rough = _round_bpm(rough_bpm)
-    best, best_s = rough, -np.inf
-    for bpm in np.arange(rough - 1.5, rough + 1.5, 0.01):
+
+    def score(bpm):
         lags = 60 * fps / bpm * np.arange(1, 33)
         lags = lags[lags < n - 1]
-        if not len(lags):
-            continue
-        s = np.interp(lags, np.arange(n), acf).mean()
-        if s > best_s:
-            best, best_s = bpm, s
+        return np.interp(lags, np.arange(n), acf).mean() if len(lags) else -np.inf
+
+    best = max(np.arange(rough - 1.5, rough + 1.5, 0.01), key=score)
+    # Produced dance music is almost always a whole BPM; a near-miss like 154.7 drifts ~1.5 beats over 5 min.
+    whole = round(best)
+    if abs(best - whole) < 0.5 and score(whole) >= 0.97 * score(best):
+        best = whole
     return _round_bpm(best)
 
 
@@ -138,11 +141,51 @@ def grid_phase(beats: np.ndarray, bpm: float) -> float:
     return float((np.angle(np.mean(np.exp(1j * ang))) / (2 * np.pi)) % 1.0 * period)
 
 
+_beat_model = None
+# Metal (MPS) aborts the whole process when two threads submit GPU work at once; every model call takes this lock.
+GPU_LOCK = threading.Lock()
+
+
+def beat_grid(y: np.ndarray, sr: int, bpm: float) -> float | None:
+    """First downbeat (seconds, within one bar) from the Beat This! beat/downbeat model, or None if unavailable.
+
+    General onset trackers often lock onto the off-beat in tracks with a rolling off-beat bass;
+    the model tells kicks from off-beats and also finds bar starts.
+    """
+    global _beat_model
+    try:
+        import torch
+        from beat_this.inference import Audio2Beats
+    except ImportError:
+        return None
+    with GPU_LOCK:
+        if _beat_model is None:
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            _beat_model = Audio2Beats(checkpoint_path="final0", device=device)
+        beats, downbeats = _beat_model(y, sr)
+    if len(beats) < 16:
+        return None
+    period = 60.0 / bpm
+
+    def circ(times: np.ndarray, unit: float) -> float:
+        ang = 2 * np.pi * (times % unit) / unit
+        return float((np.angle(np.mean(np.exp(1j * ang))) / (2 * np.pi)) % 1.0 * unit)
+
+    beat = circ(np.asarray(beats), period)
+    if len(downbeats) < 4:
+        return beat
+    # Bar start: the beat-grid position (0..3 beats after `beat`) closest to the detected downbeats.
+    bar = circ(np.asarray(downbeats), 4 * period)
+    k = round(((bar - beat) / period)) % 4
+    return beat + k * period
+
+
 def tempo_essentia(y: np.ndarray, sr: int) -> tuple[float, float]:
     bpm, ticks, *_ = es.RhythmExtractor2013(method="multifeature")(y)
     env, fps = _onset_env(y, sr)
     bpm = refine_bpm(env, fps, float(bpm))
-    return bpm, grid_phase(np.asarray(ticks), bpm)
+    phase = beat_grid(y, sr, bpm)
+    return bpm, phase if phase is not None else grid_phase(np.asarray(ticks), bpm)
 
 
 def tempo_librosa(y: np.ndarray, sr: int) -> tuple[float, float]:
@@ -152,7 +195,8 @@ def tempo_librosa(y: np.ndarray, sr: int) -> tuple[float, float]:
     tempo, beats = librosa.beat.beat_track(onset_envelope=env - env.min(), sr=sr, hop_length=HOP,
                                            start_bpm=122, units="time")
     bpm = refine_bpm(env, fps, float(np.atleast_1d(tempo)[0]))
-    return bpm, grid_phase(np.asarray(beats), bpm)
+    phase = beat_grid(y, sr, bpm)
+    return bpm, phase if phase is not None else grid_phase(np.asarray(beats), bpm)
 
 
 # ---------- energy ----------

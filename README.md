@@ -19,8 +19,9 @@ To start with a separate, empty library: `KEYMASTER_DATA=~/Music/"Key Master Tes
 | Area | What it does |
 | --- | --- |
 | Files | Browse USB sticks, drives and folders; load a file straight into deck A/B (it is added to the library and analyzed first) or add a whole folder (with or without subfolders). Added folders show up as filters in the library sidebar and can be removed again (files stay on disk) |
-| Decks A and B | Play, tempo ±8/16/50 %, key lock, SYNC (tempo and bar), QUANTIZE (cues and loops snap to the beat, hot cue jumps keep the beat phase), beat jump ±1/4/16, arrow keys walk the grid like the browser tool (paused: ← / → land on the previous/next beat line, Shift = 4 beats; playing: jump keeping the phase; Home = start), loops of 1–32 beats, 8 hot cues (nameable), zoomed and overview waveform |
-| Key shift | Per deck ± semitones without changing tempo (result is cached) |
+| Waveforms | Zoomed waveforms of A and B stacked full width above the decks with one shared zoom in played time: decks at the same played BPM show identical beat spacing, the playhead line is shared; overview per deck |
+| Decks A and B | Sample-accurate playback on one audio clock (Web Audio + Signalsmith Stretch): play, tempo ±8/16/50 %, key lock, SYNC (tempo and bar), ▶ A+B starts both decks at the same instant, QUANTIZE (cues and loops snap to the beat, hot cue jumps keep the beat phase, Play starts on the other deck's next beat; paused hot cues only move the playhead), beat jump ±1/4/16, arrow keys walk the grid like the browser tool (paused: ← / → land on the previous/next beat line, Shift = 4 beats; playing: jump keeping the phase; Home = start), loops of 1–32 beats, 8 hot cues (nameable), zoomed and overview waveform |
+| Key shift | Per deck ± semitones, live, without changing tempo |
 | Stems | Mix / vocals / instrumental with one click (Demucs, runs on the Apple GPU), export as FLAC with key shift to `~/Music/Key Master/Stems` |
 | Beatgrid (GRID) | Move the grid in 5 ms or 1 ms steps (buttons or Alt+← / →) or drag it in the waveform, "1.1 here", BPM ±0.01/0.1 or type it in, ÷2/×2, TAP, metronome, reset |
 | Mashup ideas | Tracks that fit deck A, including a key shift suggestion, filterable by playlist or genre; save and rate pairs |
@@ -37,7 +38,7 @@ Rekordbox only takes the beatgrid via XML; keys, cues and playlists can also be 
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[essentia,app,stems]"
+.venv/bin/pip install -e ".[essentia,app,stems,beats]"
 ```
 
 Without `[essentia]` everything runs on librosa. For M4A/AAC, librosa also needs `ffmpeg` (`brew install ffmpeg`); essentia reads these formats itself.
@@ -83,7 +84,8 @@ Important options for `rb`:
 | `keymaster/audio.py` | Loudness, leveling, limiter, key shift, stems |
 | `keymaster/suggest.py` | Mashup and mix ideas, set ordering |
 | `ui.html`, `analysis.js`, `export.js` | Sources of the browser tool; `keymaster build` joins them at `/*ANALYSIS*/` and `/*EXPORT*/` |
-| `keymaster/analysis.py` | Key (essentia EDM profile or librosa CQT chroma), BPM + first beat, energy 1–10, phrase cues |
+| `keymaster/analysis.py` | Key (essentia EDM profile or librosa CQT chroma), BPM (whole-BPM preference), grid phase + downbeat (Beat This! model), energy 1–10, phrase cues |
+| `app/vendor/SignalsmithStretch.js` | Time-stretch/pitch AudioWorklet (MIT) used by the decks |
 | `keymaster/rekordbox.py` | Reading/writing `master.db` via pyrekordbox, XML import/export |
 | `keymaster/keys.py` | Camelot and Rekordbox notation |
 | `keymaster/cli.py` | Command line |

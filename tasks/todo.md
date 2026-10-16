@@ -1,31 +1,18 @@
-# Todo
 
-Current plan with checkable items. Add a "Review" section when a task is done.
+## Off-beat feel + play both decks together (2026-10-16)
 
-## Beat jump & quantized cues (2026-10-16)
+Findings (measured): grids were wrong (10 of 27 tracks half a beat off vs Rekordbox, others 20–45 ms early, some non-whole BPM),
+and `<audio>` seeks landed ~50 ms late (SYNC only corrected slowly).
 
-Goal: keep the mix on the grid. Builds on the existing grid (`bpm`, `first_beat`), `Deck.quantize()` and SYNC.
-
-- [x] Global QUANTIZE toggle in the mixer, saved as setting `quantize` (default on)
-- [x] `Deck.quantize()` respects the toggle (affects setting hot cues, CUE and loop start)
-- [x] Hot cue jump while playing keeps the beat phase (target = cue + current offset to the nearest beat), so a synced deck stays in sync
-- [x] Beat jump buttons per deck: ◀16 ◀4 ◀1 1▶ 4▶ 16▶; an active loop moves with the jump
-- [x] Keyboard: ← / → jump 1 beat, with Shift 4 beats (grid mode keeps arrows for grid shifting)
-- [x] Verify in the browser: jump distances, phase kept after hot cue jump with SYNC, quantize off sets cues unsnapped
+- [x] Grid phase + downbeat from Beat This! (`beat-this`), whole-BPM preference. 60 tracks vs Rekordbox: BPM 59/60, phase median −0.6 ms, 45/59 within 25 ms, 4 half-beat errors (was ~1 in 4)
+- [x] Re-grid of tracks analysed before the new detection (`GRID_SINCE`, repeats each start until done); hand-edited/Rekordbox grids and named cues stay
+- [x] GPU lock (Metal crashed with beat model + Demucs in parallel)
+- [x] New deck engine: server-decoded PCM in Signalsmith Stretch nodes on one AudioContext clock; live key shift; key lock via semitones
+- [x] Play A+B (same audio-clock instant); quantized start on the other deck's next beat; paused hot cues only move the playhead
+- [x] Verified: offline render — start/jump/tempo land within 0.3–2.5 ms of the model, loop regular; app — Play A+B same instant, phase 0.02 ms after hot cue jump, B started on A's beat 100.0000, stems swap 0.6 s, key 10B+2 = 12B
 
 ### Review
 
-- QUANTIZE toggle in the mixer (setting `quantize`, default on). Off: cues, CUE and loop start use the exact position.
-- Hot cue jump while playing keeps the offset to the nearest beat (tested: −152.0 ms before, −151.6 ms after), so SYNC stays locked.
-- Beat jump ◀16 ◀4 ◀1 1▶ 4▶ 16▶ and ←/→ (Shift = 4 beats). Tested: +4 = 4.00 beats, −16 = −16.00 beats; an active loop moves along.
-- Fix found in testing: a jump past the track start/end is ignored instead of clamped, because clamping broke the beat phase.
-- Stems moved to their own row so Loop + Jump fit on one line.
-- Not checked: by-ear listening, behaviour on very short tracks with variable tempo (grid is constant-tempo only).
-
-## Arrow keys walk the grid like the browser tool (2026-10-16)
-
-- [x] Paused: ← / → land exactly on the previous/next beat line, Shift = 4 beats (as in ui.html)
-- [x] Playing: ← / → beat jump that keeps the phase (unchanged)
-- [x] GRID mode: grid shifting moved to Alt+← / → (Shift = 1 ms), Home = track start
-- [x] Verified with real key presses: 63.73 → 64 → 68 → 67 beats, Alt+→ moved the grid 5 ms without moving the playhead, Home → 0:00
-- Not checked: arrow keys while playing with real key presses (same jump() path as the tested buttons)
+- Root causes were the grids and the `<audio>` element, not QUANTIZE itself.
+- Not checked: listening by ear; long sessions (memory: decoded track ~50–100 MB per deck); AIFF/ALAC playback now goes through server decoding (untested with a real AIFF in the browser).
+- Known limit: actions are audible after the stretcher latency (~120 ms), but they land on the beat.
