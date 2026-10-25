@@ -21,7 +21,7 @@ Everything runs on your own computer; no audio or library data leaves it.
 ## Setup
 
 ```bash
-git clone <repository-url> keymaster
+git clone https://github.com/An-Dang/keymaster.git
 cd keymaster
 python3 -m venv .venv
 source .venv/bin/activate

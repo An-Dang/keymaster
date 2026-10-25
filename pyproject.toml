@@ -39,3 +39,7 @@ keymaster = "keymaster.cli:main"
 
 [tool.setuptools]
 packages = ["keymaster"]
+
+[project.urls]
+Homepage = "https://github.com/An-Dang/keymaster"
+Issues = "https://github.com/An-Dang/keymaster/issues"
