@@ -1,20 +1,53 @@
 # Key Master
 
-Key, BPM, cue and loudness tool for DJs, in three parts:
+Key, BPM, cue and loudness tool for DJs that works with your Rekordbox library. It comes in three parts:
 
 - **Local app** (`keymaster app`): two decks side by side, library, mashup and mix ideas, set builder, volume leveling, export to Rekordbox.
 - **Command line** (`keymaster analyze`, `keymaster rb …`): analysis and direct writes into the Rekordbox database.
 - **Browser tool** `keymaster.html`: no install, analysis in the browser, Rekordbox XML export.
 
+Everything runs on your own computer; no audio or library data leaves it.
+
+> **Status:** early (0.x). Developed and tested on macOS with Rekordbox 7. Windows and Linux are untested.
+> **Back up your Rekordbox library** before writing to it. Key Master makes its own backup before every write, but use it at your own risk.
+
+## Requirements
+
+- macOS (Apple Silicon recommended for stems)
+- Python 3.11 or newer
+- Rekordbox (only for the Rekordbox features)
+- `ffmpeg` for M4A/AAC without essentia: `brew install ffmpeg`
+
+## Setup
+
+```bash
+git clone <repository-url> keymaster
+cd keymaster
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[app,beats,stems]"
+```
+
+| Extra | Adds | License |
+| --- | --- | --- |
+| `app` | Local app (FastAPI server, loudness, tags) | MIT / BSD; mutagen GPL-2.0+, soxr LGPL-2.1+ |
+| `beats` | [Beat This!](https://github.com/CPJKU/beat_this) model for accurate beatgrids | MIT |
+| `stems` | [Demucs](https://github.com/facebookresearch/demucs) stem separation | MIT |
+| `essentia` | [essentia](https://essentia.upf.edu/) key/BPM engine (EDM key profile) | AGPL-3.0 |
+
+Without `essentia`, everything runs on librosa. To add it: `pip install -e ".[essentia]"`.
+
+The browser tool needs no setup: open `keymaster.html` in a browser.
+
 ## Local app
 
 ```bash
-.venv/bin/keymaster app
+keymaster app
 ```
 
-Opens `http://127.0.0.1:8765/` in your browser. The app only runs on your computer.
+This opens `http://127.0.0.1:8765/` in your browser. The server only listens on your computer.
 Library and caches live in `~/Library/Application Support/Key Master/`.
-To start with a separate, empty library: `KEYMASTER_DATA=~/Music/"Key Master Test" .venv/bin/keymaster app`.
+To start with a separate, empty library: `KEYMASTER_DATA=~/Music/"Key Master Test" keymaster app`.
 
 | Area | What it does |
 | --- | --- |
@@ -34,15 +67,7 @@ To start with a separate, empty library: `KEYMASTER_DATA=~/Music/"Key Master Tes
 
 All edits (grid, cues, key, ratings, playlists) are saved locally right away and go to Rekordbox when you export.
 Rekordbox only takes the beatgrid via XML; keys, cues and playlists can also be written directly.
-
-## Setup
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[essentia,app,stems,beats]"
-```
-
-Without `[essentia]` everything runs on librosa. For M4A/AAC, librosa also needs `ffmpeg` (`brew install ffmpeg`); essentia reads these formats itself.
+Your music files are never changed: processing writes copies (`_KM` suffix or an output folder).
 
 ## Commands
 
@@ -55,7 +80,7 @@ keymaster rb analyze --only-missing --playlist "New" --cues --write
 keymaster rb import-xml ~/Downloads/rekordbox.xml --write   # take cues/keys from the browser tool
 ```
 
-(`keymaster` lives in `.venv/bin/`; alternatively `python -m keymaster …`.)
+`python -m keymaster …` works as well.
 
 Important options for `rb`:
 
@@ -63,7 +88,7 @@ Important options for `rb`:
 | --- | --- |
 | `--write` | Without it, every run is a dry run. |
 | `--overwrite` | Replace existing keys and hot cues. Default: only fill empty fields/pads. |
-| `--notation classic` | Store keys as `Am` instead of `8A`. Your collection mostly uses `8A` so far. |
+| `--notation classic` | Store keys as `Am` instead of Camelot `8A`. |
 | `--cues` | Automatic phrase cues: A = first beat, B–G = drops/breaks on 8-bar boundaries, H = "Outro" 4-beat loop at the last full 8-bar phrase. |
 | `--db PATH` | A different `master.db`, e.g. a copy for testing. |
 
@@ -87,6 +112,26 @@ Important options for `rb`:
 | `ui.html`, `analysis.js`, `export.js` | Sources of the browser tool; `keymaster build` joins them at `/*ANALYSIS*/` and `/*EXPORT*/` |
 | `keymaster/analysis.py` | Key (essentia EDM profile or librosa CQT chroma), BPM (whole-BPM preference), grid phase + downbeat (Beat This! model), energy 1–10, phrase cues |
 | `app/vendor/SignalsmithStretch.js` | Time-stretch/pitch AudioWorklet (MIT) used by the decks |
-| `keymaster/rekordbox.py` | Reading/writing `master.db` via pyrekordbox, XML import/export |
+| `keymaster/rekordbox.py` | Reading/writing `master.db` via [pyrekordbox](https://github.com/dylanljones/pyrekordbox), XML import/export |
 | `keymaster/keys.py` | Camelot and Rekordbox notation |
 | `keymaster/cli.py` | Command line |
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Copyright (C) 2026 An Dang
+
+Key Master is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY. See [LICENSE](LICENSE) for details.
+
+Third-party code and dependencies keep their own licenses:
+
+- `app/vendor/SignalsmithStretch.js`: Signalsmith Stretch, MIT, © Geraint Luff / Signalsmith Audio
+- Optional `essentia` extra: AGPL-3.0. If you install it and distribute or offer the result over a network, the AGPL terms apply to that combination.
+- The UI loads the Archivo and IBM Plex Mono fonts from Google Fonts (SIL Open Font License).
+
+## Disclaimer
+
+Key Master is an independent project and is not affiliated with, endorsed by or sponsored by AlphaTheta Corporation or Pioneer DJ. Rekordbox is a trademark of AlphaTheta Corporation. Camelot is a trademark of Mixed In Key LLC.

@@ -1,4 +1,9 @@
 .venv/
 __pycache__/
 *.egg-info/
+build/
+dist/
 .DS_Store
+
+# local agent working files (see AGENTS.md)
+tasks/

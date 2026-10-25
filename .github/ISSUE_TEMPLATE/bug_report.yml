@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go through SECURITY.md, not here.
+        Never attach your Rekordbox `master.db` or copyrighted audio.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part
+      options:
+        - Local app
+        - Command line
+        - Browser tool (keymaster.html)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Load a FLAC file into deck A
+        2. Press SYNC
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Key Master version
+      description: Output of `pip show keymaster` or the commit hash.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: macOS 15.4, Apple M2, Rekordbox 7.1, Chrome 141
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: Audio format
+      description: If it is about analysis or playback (MP3, FLAC, M4A, WAV, ...).
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal output or browser console
+      render: text

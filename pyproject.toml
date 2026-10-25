@@ -1,11 +1,25 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "keymaster"
 version = "0.1.0"
 description = "Key Master: key, BPM, cue and loudness tool for DJs that writes straight into the Rekordbox database"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "An Dang", email = "mail@andang.de" }]
+keywords = ["dj", "rekordbox", "key detection", "bpm", "beatgrid", "camelot", "loudness", "stems"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
 requires-python = ">=3.11"
 dependencies = [
     "librosa>=0.10",

@@ -76,7 +76,6 @@ Key, BPM, cue and loudness tool for DJs. See `README.md` for features.
 - **Build the browser tool:** `.venv/bin/keymaster build` after changing `ui.html`, `analysis.js` or `export.js`. Commit the rebuilt `keymaster.html`.
 - **Run the app for testing:** use a throwaway library so the user's data stays untouched:
   `KEYMASTER_DATA=/tmp/km-test .venv/bin/keymaster app --no-browser --port 8766`
-- **Shell output:** commands run through [rtk](https://github.com/rtk-ai/rtk) (global Claude Code hook) to keep output compact; `rtk gain` shows the token savings.
 - **Checks:** `.venv/bin/python -m compileall -q keymaster` and `node --check app/app.js`; verify UI changes in a browser.
 - **Audio engine (app):** decks play server-decoded PCM (`/api/pcm`) through Signalsmith Stretch nodes on one AudioContext. Its `schedule()` takes `outputTime` (the README says `output`) and keeps only one pending change; see `Deck.push()`.
 - **Language:** all user-facing text (UI, CLI, server messages, docs) is English.
