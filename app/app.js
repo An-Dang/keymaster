@@ -1067,12 +1067,34 @@ $$('#libTable th[data-sort]').forEach((th) => th.addEventListener('click', () =>
 }));
 $('#search').addEventListener('input', (e) => { S.search = e.target.value; scheduleLibraryRender(); });
 
+S.openFolders = new Set((() => { try { return JSON.parse(localStorage.getItem('km:open') || '[]'); } catch (e) { return []; } })());
 function renderPlaylists() {
   const rbs = S.playlists.filter((p) => p.source === 'rekordbox'), locs = S.playlists.filter((p) => p.source !== 'rekordbox');
   const item = (p) => `<li><button type="button" data-pl="${p.id}" aria-current="${S.plFilter === p.id}"><span>${esc(p.name)}</span><small>${p.n}</small></button></li>`;
   const folders = S.settings.folders || [];
-  const fcount = (f) => { const pre = f.replace(/\/$/, '') + '/'; let n = 0; S.tracks.forEach((t) => { if (t.path.startsWith(pre)) n++; }); return n; };
-  const fitem = (f) => `<li class="row"><button type="button" data-pl="f:${esc(f)}" aria-current="${S.plFilter === 'f:' + f}" title="${esc(f)}"><span>${FOLDER_ICON}${esc(f.split('/').filter(Boolean).pop() || f)}</span><small>${fcount(f)}</small></button><button type="button" class="x" data-rmfolder="${esc(f)}" aria-label="Remove folder ${esc(f)} from library">✕</button></li>`;
+  // Each added folder as a tree of its subfolders (counts include deeper subfolders).
+  const tree = (root) => {
+    const base = root.replace(/\/$/, ''), top = { name: base.split('/').pop() || base, path: base, count: 0, kids: new Map() };
+    S.tracks.forEach((t) => {
+      if (!t.path.startsWith(base + '/')) return;
+      let node = top; node.count++;
+      for (const part of t.path.slice(base.length + 1).split('/').slice(0, -1)) {
+        if (!node.kids.has(part)) node.kids.set(part, { name: part, path: node.path + '/' + part, count: 0, kids: new Map() });
+        node = node.kids.get(part); node.count++;
+      }
+    });
+    return top;
+  };
+  const fnode = (n, depth, isRoot) => {
+    const open = S.openFolders.has(n.path), hasKids = n.kids.size > 0;
+    const kids = open ? [...n.kids.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map((k) => fnode(k, depth + 1, false)).join('') : '';
+    return `<li class="row" style="--depth:${depth}">`
+      + `<button type="button" class="tw" data-twist="${esc(n.path)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(n.name)}" ${hasKids ? '' : 'disabled'}>${hasKids ? (open ? '▾' : '▸') : ''}</button>`
+      + `<button type="button" data-pl="f:${esc(n.path)}" aria-current="${S.plFilter === 'f:' + n.path}" title="${esc(n.path)}"><span>${FOLDER_ICON}${esc(n.name)}</span><small>${n.count}</small></button>`
+      + (isRoot ? `<button type="button" class="x" data-rmfolder="${esc(n.path)}" aria-label="Remove folder ${esc(n.name)} from library">✕</button>` : '')
+      + `</li>${kids}`;
+  };
+  const fitem = (f) => fnode(tree(f), 0, true);
   $('#plList').innerHTML = `<li><button type="button" data-pl="all" aria-current="${S.plFilter === 'all'}"><span>All tracks</span><small>${S.tracks.size}</small></button></li>`
     + (folders.length ? `<li class="label sep">Folders</li>${folders.map(fitem).join('')}` : '')
     + (locs.length ? `<li class="label sep">Key Master</li>${locs.map(item).join('')}` : '')
@@ -1085,6 +1107,13 @@ function renderPlaylists() {
   ss.value = sv || 'sel';
 }
 $('#plList').addEventListener('click', async (e) => {
+  const tw = e.target.closest('[data-twist]');
+  if (tw) {
+    const p = tw.dataset.twist;
+    if (S.openFolders.has(p)) S.openFolders.delete(p); else S.openFolders.add(p);
+    try { localStorage.setItem('km:open', JSON.stringify([...S.openFolders])); } catch (err) { /* convenience only */ }
+    renderPlaylists(); return;
+  }
   const rm = e.target.closest('[data-rmfolder]');
   if (rm) {
     const f = rm.dataset.rmfolder;
@@ -1128,6 +1157,12 @@ $('#selActions').addEventListener('click', async (e) => {
     S.playlists = r.playlists; renderPlaylists(); toast(`Playlist "${esc(name)}" saved`);
   }
   if (act === 'set') { $('#setSource').value = 'sel'; selectTab('set'); runSet(); }
+  if (act === 'remove') {
+    if (!(await confirmDlg(`Remove ${ids.length} tracks?`, '<p>Removes them from the Key Master library only. The files and Rekordbox stay untouched; cues and grid edits made in Key Master are lost.</p>', 'Remove'))) return;
+    const r = await api('/api/tracks/remove', { body: { track_ids: ids } });
+    S.sel.clear(); toast(`Removed ${r.removed} tracks from the library`);
+    await loadState(); return;
+  }
   if (act === 'reanalyze') {
     for (const id of ids) await api(`/api/tracks/${id}/analyze`, { body: {} });
     toast(`Re-analyzing ${ids.length} tracks`);
@@ -1418,7 +1453,7 @@ $('#fsAdd').addEventListener('click', async () => {
   if (!S.fs) return;
   try {
     const r = await api('/api/folders', { body: { path: S.fs.path, recursive: $('#fsRec').checked } });
-    S.settings.folders = r.folders;
+    S.settings.folders = r.folders; S.openFolders.add(r.path.replace(/\/$/, ''));
     toast(`Added ${r.added} tracks from ${esc(r.path.split('/').pop())}. Analysis runs in the background.`);
     await loadState(); await fsOpen(S.fs.path);
   } catch (e) { toast(e.message, { error: true }); }
@@ -1431,11 +1466,14 @@ $('#addFolder').addEventListener('click', async () => {
     const r = await api('/api/folders', { body: {} });
     if (r.cancelled) { $('#toast').hidden = true; return; }
     toast(`Added ${r.added} tracks from ${esc(r.path)}. Analysis runs in the background.`);
-    S.settings.folders = r.folders;
+    S.settings.folders = r.folders; S.openFolders.add(r.path.replace(/\/$/, ''));
     await loadState();
   } catch (e) { toast(e.message, { error: true }); }
 });
 $('#rbImport').addEventListener('click', async () => {
+  const ok = await confirmDlg('Load Rekordbox collection?',
+    '<p>Adds all tracks of your Rekordbox collection (keys, beatgrids, cues, playlists) to Key Master. Rekordbox itself is not changed.</p><p>The tracks are then analysed in the background (about 3 s per track). You can stop that anytime with <b>Stop</b> in the header.</p>', 'Load');
+  if (!ok) return;
   try { await api('/api/rekordbox/import', { body: {} }); toast('Loading Rekordbox collection …'); S.waitImport = true; }
   catch (e) { toast(e.message, { error: true }); }
 });
@@ -1477,6 +1515,19 @@ async function exportDialog(kind) {
   } catch (e) { toast(e.message, { error: true, ms: 7000 }); }
 }
 
+/* ---------- stop / resume background work ---------- */
+$('#jobsStop').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/jobs/cancel', { body: {} });
+    await saveSettings({ auto_analyze: false });
+    toast(`Stopped ${r.cancelled} jobs. Background analysis is paused; tracks you load into a deck are still analysed.`, { ms: 6000 });
+  } catch (e) { toast(e.message, { error: true }); }
+});
+$('#jobsResume').addEventListener('click', async () => {
+  await saveSettings({ auto_analyze: true });
+  toast('Background analysis resumed');
+});
+
 /* ---------- keyboard ---------- */
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, select, textarea') || !$('#dlgBack').hidden || e.metaKey || e.ctrlKey) return;
@@ -1499,6 +1550,7 @@ async function pollJobs() {
     const active = jobs.filter((j) => j.state === 'running' || j.state === 'queued');
     const ind = $('#jobsInd');
     ind.hidden = !active.length;
+    $('#pausedInd').hidden = !!active.length || S.settings.auto_analyze !== false;
     if (active.length) {
       const running = jobs.filter((j) => j.state === 'running');
       const an = active.filter((j) => j.kind === 'analyze').length;
@@ -1512,6 +1564,7 @@ async function pollJobs() {
         S.waitImport = false; await loadState();
         toast(`Rekordbox loaded: ${j.result.tracks} tracks, ${j.result.playlists} playlists`);
       }
+      if (j.kind === 'rbimport' && j.state === 'cancelled' && S.waitImport) { S.waitImport = false; await loadState(); toast('Rekordbox import stopped. Tracks added so far stay; remove them via selection → Remove from library.', { ms: 7000 }); }
       if (j.kind === 'rbimport' && j.state === 'error' && S.waitImport) { S.waitImport = false; toast('Loading Rekordbox failed: ' + esc(j.error), { error: true, ms: 8000 }); }
     }
     if (S.tab === 'loud') renderProcList();

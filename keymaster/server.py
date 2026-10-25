@@ -45,6 +45,10 @@ AUTO_CUE_NAMES = {"Start", "Drop", "Break", "Outro"}  # names phrase_cues() give
 
 # ---------- jobs ----------
 
+class JobCancelled(Exception):
+    """Raised from a job's progress callback after the user pressed Stop."""
+
+
 class Jobs:
     """Priority job lanes: 'analysis' (2 workers) and 'render' (1 worker, stems/pitch/processing)."""
 
@@ -95,19 +99,41 @@ class Jobs:
                     break
                 job["state"] = "running"
                 job["started"] = time.time()
+            def progress(p, job=job):
+                if job.get("cancel"):
+                    raise JobCancelled()
+                job["progress"] = float(p)
+
             try:
-                job["result"] = job["_fn"](lambda p: job.__setitem__("progress", float(p)))
+                job["result"] = job["_fn"](progress)
                 job["state"], job["progress"] = "done", 1.0
+            except JobCancelled:
+                job["state"] = "cancelled"
             except Exception as e:  # noqa: BLE001 - surfaced to the UI
                 job["state"], job["error"] = "error", str(e)
                 traceback.print_exc()
             job["finished"] = time.time()
 
+    def cancel(self, kinds: set[str] | None = None) -> int:
+        """Drops queued jobs and asks running ones to stop at their next progress step."""
+        n = 0
+        with self._lock:
+            for j in self.jobs.values():
+                if kinds and j["kind"] not in kinds:
+                    continue
+                if j["state"] == "queued":
+                    j["state"], j["finished"] = "cancelled", time.time()
+                    n += 1
+                elif j["state"] == "running":
+                    j["cancel"] = True
+                    n += 1
+        return n
+
     def public(self, since: float = 0) -> list[dict]:
         cutoff = time.time() - 120
         out = []
         for j in list(self.jobs.values()):
-            if j["state"] in ("done", "error") and j.get("finished", 0) < cutoff:
+            if j["state"] in ("done", "error", "cancelled") and j.get("finished", 0) < cutoff:
                 continue
             out.append(pub(j))
         return out
@@ -150,6 +176,13 @@ def create_app() -> FastAPI:
                 lib.update(tid, status="missing", error="File not found")
                 raise FileNotFoundError(f"File missing: {path}")
             lib.update(tid, status="analyzing")
+            try:
+                return analyze(t, path, progress)
+            except JobCancelled:
+                lib.update(tid, status="new")
+                raise
+
+        def analyze(t, path, progress):
             x, sr = audio.load_stereo(path)
             progress(0.2)
             mono = audio.to_mono_44k(x, sr)
@@ -160,6 +193,8 @@ def create_app() -> FastAPI:
             loud = audio.measure(x, sr)
             progress(0.9)
             t = lib.track(tid)
+            if not t:  # removed from the library meanwhile
+                return None
             upd = {"duration": r.duration, "sample_rate": sr, "energy": r.energy, "key_strength": r.key.strength,
                    "bpm_detected": r.bpm, "first_beat_detected": r.first_beat, "key_detected": r.key.camelot,
                    "lufs": loud["lufs"], "peak_db": loud["peak_db"], "clipped": loud["clipped"],
@@ -222,10 +257,12 @@ def create_app() -> FastAPI:
 
     def watch():
         add_outro_loops()
-        enqueue_missing()
+        if settings.get("auto_analyze"):
+            enqueue_missing()
         while True:
-            regrid_old()
-            retry_reappeared()
+            if settings.get("auto_analyze"):  # off = paused with the Stop button
+                regrid_old()
+                retry_reappeared()
             time.sleep(20)
 
     def enqueue_missing(priority: int = 5):
@@ -234,8 +271,7 @@ def create_app() -> FastAPI:
                 if t["status"] != "missing":
                     enqueue_analysis(t["id"], priority)
 
-    if settings.get("auto_analyze"):
-        threading.Thread(target=watch, daemon=True).start()
+    threading.Thread(target=watch, daemon=True).start()
 
     # ----- audio variants (stems, key shift) -----
 
@@ -302,6 +338,14 @@ def create_app() -> FastAPI:
     def delete_track(tid: int):
         lib.delete(tid)
         return {"ok": True}
+
+    @app.post("/api/tracks/remove")
+    def remove_tracks(body: dict = Body(...)):
+        """Removes tracks from the Key Master library only; files and Rekordbox stay untouched."""
+        ids = [int(i) for i in body.get("track_ids") or []]
+        for tid in ids:
+            lib.delete(tid)
+        return {"removed": len(ids)}
 
     @app.post("/api/tracks/{tid}/analyze")
     def reanalyze(tid: int, body: dict = Body(default={})):
@@ -494,7 +538,8 @@ def create_app() -> FastAPI:
     def rb_import():
         def run(progress):
             res = rb.import_collection(lib, progress=progress)
-            enqueue_missing()
+            if settings.get("auto_analyze"):
+                enqueue_missing()
             return res
         return pub(jobs.submit("render", "rbimport", "Load Rekordbox collection", run, key="rbimport", priority=0))
 
@@ -676,7 +721,14 @@ def create_app() -> FastAPI:
             raise HTTPException(400, f"Unknown setting: {', '.join(unknown)}")
         settings.update(body)
         lib.set_settings(**body)
+        if body.get("auto_analyze"):  # Resume
+            threading.Thread(target=enqueue_missing, daemon=True).start()
         return settings
+
+    @app.post("/api/jobs/cancel")
+    def cancel_jobs(body: dict = Body(default={})):
+        kinds = set(body["kinds"]) if body.get("kinds") else None
+        return {"cancelled": jobs.cancel(kinds)}
 
     @app.get("/api/jobs")
     def job_list():

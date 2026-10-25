@@ -25,3 +25,12 @@ and `<audio>` seeks landed ~50 ms late (SYNC only corrected slowly).
 - [x] Rekordbox: XML `Type="4"` with `End`; direct write sets `OutMsec/OutFrame`; import keeps loop ends
 - [x] Verified: migration (Outro on beats 896/320/512 = phrase starts, own H cue kept), XML, DB copy write + re-import, browser save/trigger loop cue and Outro loop
 - Not checked: how Rekordbox itself shows the loop cues after import (only the data was checked)
+
+## Stop background work + folder tree (2026-10-17)
+
+- [x] Jobs can be cancelled: queued dropped, running stop at their next progress step (analysis puts the track back to "new")
+- [x] Header **Stop** (cancel all + pause analysis) / **Resume**; watcher and Rekordbox import respect the pause; deck loads still analyse
+- [x] "Load Rekordbox" confirmation; selection action **Remove from library** (files/Rekordbox untouched)
+- [x] Sidebar folder tree: each added folder with its subfolders, expandable, recursive counts, click filters by path; new folders open expanded
+- [x] Verified in browser with Trance:Bouncy (90 real files, 84 ._ junk files ignored): tree 2025-10/2026-01/2026-08/2026-10; Stop → 0 jobs, 85 cancelled, no track stuck "analyzing"; Resume → 83 queued; confirm + Cancel starts no import; removing 2026-01 kept the files
+- Not checked: stopping a running stem separation mid-way (cancel happens at Demucs' next progress callback)
