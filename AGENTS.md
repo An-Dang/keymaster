@@ -46,6 +46,11 @@ Instructions for AI coding agents working on Key Master.
 - Zero context switching required from the user
 - Go fix failing CI tests without being told how
 
+### 7. Feature Branches
+
+- Every new feature or non-trivial change: plan mode first, then create a branch from an up-to-date `main` (`feature/<short-name>`, `fix/<short-name>`, `docs/<short-name>`) before the first edit
+- Never commit features directly to `main`; merge via pull request after the user approves
+
 ## Task Management
 
 1. **Plan First:** Write the plan to `tasks/todo.md` with checkable items
